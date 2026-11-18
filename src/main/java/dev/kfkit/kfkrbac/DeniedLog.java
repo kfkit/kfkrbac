@@ -192,7 +192,8 @@ final class DeniedLog {
         intervalNanos = TimeUnit.SECONDS.toNanos(intervalSeconds(configs.get(INTERVAL_CONFIG)));
     }
 
-    private static int intervalSeconds(Object value) {
+    /** The interval a value of {@value #INTERVAL_CONFIG} sets, in seconds; the default when it is absent. */
+    static int intervalSeconds(Object value) {
         if (value == null) {
             return DEFAULT_INTERVAL_SECONDS;
         }

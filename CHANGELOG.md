@@ -26,6 +26,12 @@ major version is 0.
   bindings the principal holds for other resource types, so that it does
   not read as "this principal holds no role at all". See
   [docs/troubleshooting.md](docs/troubleshooting.md).
+- A role lookup that keeps failing no longer writes the `ERROR` line
+  `Role lookup failed` with its stack trace for every request: the line is
+  written once per `kfkrbac.denied.log.interval.seconds`, and says how many
+  failures were left out since the last one. Every such request is still
+  denied. See
+  [docs/troubleshooting.md](docs/troubleshooting.md#how-often-a-line-is-written).
 - With `kafka.authorizer.logger` at `TRACE`, the check for a deny ACL after
   a role or a group allowed a request, and the check of the ACLs of groups,
   no longer write lines of their own there, as if they were decisions of

@@ -172,6 +172,9 @@ public class RbacAuthorizer extends StandardAuthorizer {
     /** Whether the ACLs are loaded: until then the deny ACLs are not known, and "not ready" is the answer. */
     private volatile boolean loaded;
 
+    /** Logs a role lookup that failed, at most once per interval. */
+    private final LookupFailures lookupFailures;
+
     /** Publishes the verdicts as kfkwho's metrics; null unless {@link #METRICS_ENABLED_CONFIG} is on. */
     private volatile AccessRecorder recorder;
 
@@ -205,11 +208,13 @@ public class RbacAuthorizer extends StandardAuthorizer {
         this.denials = new DeniedLog(held, (context, action) -> denied(context, action.operation(),
                 action.resourcePattern()));
         this.audit = new RoleAudit(held, (context, action) -> groupAcls.allowing(context, principal(context), action));
+        this.lookupFailures = new LookupFailures();
     }
 
     @Override
     public void configure(Map<String, ?> configs) {
         denials.configure(configs);
+        lookupFailures.configure(configs);
         super.configure(configs);
         Object enabled = configs.get(METRICS_ENABLED_CONFIG);
         if (enabled != null
@@ -425,8 +430,7 @@ public class RbacAuthorizer extends StandardAuthorizer {
                 }
             }
         } catch (RuntimeException e) {
-            LOG.error("Role lookup failed for {} {} on any {}; denied", requestContext.principal(), op,
-                    resourceType, e);
+            lookupFailures.failed(requestContext.principal(), op, "any " + resourceType, e);
             cause = DeniedLog.Cause.ROLES_FAILED;
         }
         denials.deniedOnAnyResource(requestContext, op, resourceType, cause);
@@ -590,8 +594,7 @@ public class RbacAuthorizer extends StandardAuthorizer {
                 return true;
             }
         } catch (RuntimeException e) {
-            LOG.error("Role lookup failed for {} {} on {}; denied", requestContext.principal(),
-                    action.operation(), action.resourcePattern(), e);
+            lookupFailures.failed(requestContext.principal(), action.operation(), action.resourcePattern(), e);
             consulted = false;
         }
         denials.denied(requestContext, action, consulted);

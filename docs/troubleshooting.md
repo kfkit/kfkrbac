@@ -89,7 +89,7 @@ Read it left to right:
 |---|---|---|
 | `no ACL and no role allows it` | no ACL allows the request and no role bound to the principal grants it | read the roles the line names, below |
 | `a deny ACL matches` | a deny ACL matches the request; a deny ACL beats every role and every allow ACL | find the ACL in the broker's authorizer log, see [Where each line goes](#where-each-line-goes); no binding helps until it is deleted |
-| `the roles could not be consulted, see "Role lookup failed" in the broker's log` | the role lookup failed, and nothing is granted on failure | the `ERROR` line `Role lookup failed` before it has the exception |
+| `the roles could not be consulted, see "Role lookup failed" in the broker's log` | the role lookup failed, and nothing is granted on failure | the `ERROR` line `Role lookup failed` before it has the exception; a lookup that keeps failing writes that line once per interval, see [How often a line is written](#how-often-a-line-is-written) |
 
 For `ALTER` on the cluster with the request `AlterUserScramCredentials` the
 first cause reads `no ACL allows it, and for this request no role but
@@ -410,6 +410,17 @@ Denied User:bob READ on TOPIC 'orders' (request Fetch): no ACL and no role allow
 The interval is the setting `kfkrbac.denied.log.interval.seconds`
 ([Settings](settings.md)); `0` logs every denial.
 
+The same interval bounds the `ERROR` line `Role lookup failed`, which
+carries the exception: a lookup that fails once usually fails for every
+request until what broke is mended. The first failure is written with its
+stack trace, the ones in the rest of the interval are counted, and the next
+line says how many there were. Every one of those requests is denied all
+the same:
+
+```
+Role lookup failed for User:bob READ on ResourcePattern(resourceType=TOPIC, name=orders, patternType=LITERAL); denied; 4 more lookups failed and were denied since this was last logged
+```
+
 Only denials the broker itself wants logged are written: a request that
 only asks what a client may see, such as a listing of all topics, is not a
 failure and leaves no line.
@@ -433,7 +444,7 @@ Forgot 16 of the denied requests remembered so as not to log them again, to stay
 | `dev.kfkit.kfkrbac.denied` | `INFO` | a request that was denied, and why |
 | `kafka.authorizer.logger` | `INFO` | the broker's own line for a denied request, unchanged |
 | `kafka.authorizer.logger` | `DEBUG` | the broker's own line for a request an ACL allows, and the same line for a request a role or an ACL of a group allows |
-| `dev.kfkit.kfkrbac.RbacAuthorizer` | `ERROR` | `Role lookup failed`, with the exception |
+| `dev.kfkit.kfkrbac.RbacAuthorizer` | `ERROR` | `Role lookup failed`, with the exception, at most once per interval |
 | `dev.kfkit.kfkrbac.RbacAuthorizer` | `INFO` | `Refused to create` and `Refused to delete`, on the controller: a request for ACL records that the rules for bindings refused, with the reason the caller got |
 | `dev.kfkit.kfkrbac.BindingIndex` | `WARN` | a record that looks like a binding or a membership and is not one |
 
