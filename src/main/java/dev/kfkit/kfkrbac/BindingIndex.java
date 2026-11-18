@@ -176,6 +176,44 @@ final class BindingIndex implements Roles {
         return patterns;
     }
 
+    /**
+     * Whether a binding of the role applies to the principal, whatever it
+     * names. On the request path: no lock, nothing allocated.
+     */
+    boolean holds(KafkaPrincipal principal, Role role) {
+        Map<KafkaPrincipal, RoleBinding[]> bindings = byMember;
+        List<KafkaPrincipal> members = identities.of(principal);
+        for (int i = 0; i < members.size(); i++) {
+            RoleBinding[] held = bindings.get(members.get(i));
+            if (held == null) {
+                continue;
+            }
+            for (RoleBinding binding : held) {
+                if (binding.role() == role) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Every binding that applies to the principal: its own and those of its
+     * other identities. For deciding what the principal may bind, which is
+     * asked rarely; not for the request path.
+     */
+    List<RoleBinding> heldBy(KafkaPrincipal principal) {
+        Map<KafkaPrincipal, RoleBinding[]> bindings = byMember;
+        List<RoleBinding> all = new ArrayList<>();
+        for (KafkaPrincipal member : identities.of(principal)) {
+            RoleBinding[] held = bindings.get(member);
+            if (held != null) {
+                all.addAll(Arrays.asList(held));
+            }
+        }
+        return all;
+    }
+
     private static void warn(Uuid id, StandardAcl acl, BindingCodec.Malformed notABinding) {
         LOG.warn("ACL {} has a role as its principal type and is not a role binding, so it grants nothing: {}: {}",
                 id, notABinding.reason(), acl);

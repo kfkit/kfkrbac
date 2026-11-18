@@ -68,6 +68,34 @@ class BindingIndexTest {
     }
 
     @Test
+    void whatAPrincipalHoldsIsItsOwnBindingsAndThoseOfItsOtherIdentities() {
+        BindingIndex index = new BindingIndex(
+                principal -> principal.equals(ALICE) ? List.of(ALICE, PAYMENTS) : List.of(principal));
+        Uuid owner = Uuid.randomUuid();
+        index.add(owner, binding("ResourceOwner:User:alice", "billing."));
+        index.add(Uuid.randomUuid(), binding("DeveloperRead:Group:payments", "payments."));
+        index.add(Uuid.randomUuid(), binding("DeveloperWrite:User:bob", "billing."));
+        KafkaPrincipal bob = new KafkaPrincipal("User", "bob");
+
+        assertEquals(List.of(
+                new RoleBinding(Role.RESOURCE_OWNER, ALICE, RoleBinding.Target.NAMES, "billing.",
+                        PatternType.PREFIXED),
+                new RoleBinding(Role.DEVELOPER_READ, PAYMENTS, RoleBinding.Target.NAMES, "payments.",
+                        PatternType.PREFIXED)),
+                index.heldBy(ALICE));
+        assertTrue(index.holds(ALICE, Role.RESOURCE_OWNER));
+        assertTrue(index.holds(ALICE, Role.DEVELOPER_READ));
+        assertFalse(index.holds(ALICE, Role.DEVELOPER_WRITE));
+        assertFalse(index.holds(bob, Role.RESOURCE_OWNER));
+        assertEquals(1, index.heldBy(bob).size());
+        assertEquals(List.of(), index.heldBy(new KafkaPrincipal("User", "carol")));
+
+        index.remove(owner);
+        assertFalse(index.holds(ALICE, Role.RESOURCE_OWNER));
+        assertEquals(1, index.heldBy(ALICE).size());
+    }
+
+    @Test
     void theSameBindingUnderTwoIdsIsHeldUntilBothAreRemoved() {
         BindingIndex index = new BindingIndex();
         Uuid first = Uuid.randomUuid();
