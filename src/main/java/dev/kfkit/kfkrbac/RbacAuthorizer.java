@@ -89,7 +89,9 @@ import org.slf4j.LoggerFactory;
  * with the caller's own principal, decide who may: the rules are
  * {@link Delegation}'s. A principal that holds {@code ResourceOwner} is let
  * through the broker's check before those calls, and before a listing of
- * the ACLs, and through nothing else that check guards.
+ * the ACLs, and through nothing else that check guards. The same check
+ * guards the request that replaces a user's password, and there no role but
+ * {@code SystemAdmin} passes it.
  *
  * <p>Configure with {@code authorizer.class.name=dev.kfkit.kfkrbac.RbacAuthorizer}.
  */
@@ -267,7 +269,12 @@ public class RbacAuthorizer extends StandardAuthorizer {
             return parent;
         }
         try {
-            for (ResourcePattern pattern : roles.grantedPatterns(principal(requestContext), op, resourceType)) {
+            KafkaPrincipal principal = principal(requestContext);
+            if (keptForSystemAdmin(requestContext, op, resourceType)
+                    && !bindings.holds(principal, Role.SYSTEM_ADMIN)) {
+                return AuthorizationResult.DENIED;
+            }
+            for (ResourcePattern pattern : roles.grantedPatterns(principal, op, resourceType)) {
                 if (!coveredByDeny(requestContext, op, pattern)) {
                     return AuthorizationResult.ALLOWED;
                 }
@@ -409,8 +416,14 @@ public class RbacAuthorizer extends StandardAuthorizer {
     private boolean roleAllows(AuthorizableRequestContext requestContext, Action action) {
         try {
             KafkaPrincipal principal = principal(requestContext);
-            return (roles.grants(principal, action)
-                    || opensTheAclApi(requestContext, action) && bindings.holds(principal, Role.RESOURCE_OWNER))
+            boolean granted = roles.grants(principal, action);
+            if (granted) {
+                granted = !keptForSystemAdmin(requestContext, action.operation(),
+                        action.resourcePattern().resourceType()) || bindings.holds(principal, Role.SYSTEM_ADMIN);
+            } else {
+                granted = opensTheAclApi(requestContext, action) && bindings.holds(principal, Role.RESOURCE_OWNER);
+            }
+            return granted
                     && !denied(requestContext, action.operation(), action.resourcePattern(),
                             action.resourceReferenceCount());
         } catch (RuntimeException e) {
@@ -440,6 +453,25 @@ public class RbacAuthorizer extends StandardAuthorizer {
             return request == ApiKeys.CREATE_ACLS.id || request == ApiKeys.DELETE_ACLS.id;
         }
         return action.operation() == AclOperation.DESCRIBE && request == ApiKeys.DESCRIBE_ACLS.id;
+    }
+
+    /**
+     * Whether the question is one that, of all the roles, only
+     * {@code SystemAdmin} answers: {@code ALTER} on the cluster for a request
+     * that changes who can authenticate, so that a role is not a way to
+     * become a super user. {@code AlterUserScramCredentials} replaces the
+     * password of any user, a super user's included, and the broker guards
+     * it with the same {@code ALTER} on the cluster that lets an operator
+     * move partitions and elect leaders. What an ACL allows is not touched.
+     *
+     * <p>The requests that create and delete ACLs are guarded with it too,
+     * and are not here: {@link #createAcls} and {@link #deleteAcls} decide
+     * them, with a reason for the caller.
+     */
+    private static boolean keptForSystemAdmin(AuthorizableRequestContext requestContext, AclOperation operation,
+            ResourceType resourceType) {
+        return operation == AclOperation.ALTER && resourceType == ResourceType.CLUSTER
+                && requestContext.requestType() == ApiKeys.ALTER_USER_SCRAM_CREDENTIALS.id;
     }
 
     /** Who asks, with everything the rules of {@link Delegation} need to know about it. */

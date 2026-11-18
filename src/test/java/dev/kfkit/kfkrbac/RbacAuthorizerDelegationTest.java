@@ -97,6 +97,9 @@ class RbacAuthorizerDelegationTest {
     private static final StandardAcl FRANK_RUNS_THE_CLUSTER = record(binding("ClusterAdmin:User:frank", THE_CLUSTER));
     private static final StandardAcl GRACE_ALTERS_THE_CLUSTER = allow("User:grace", THE_CLUSTER, ALTER);
 
+    /** The request types for which, of all the roles, only {@code SystemAdmin} grants {@code ALTER} on the cluster. */
+    private static final List<ApiKeys> KEPT_FOR_SYSTEM_ADMIN = List.of(ApiKeys.ALTER_USER_SCRAM_CREDENTIALS);
+
     private static final AclBinding ALICE_READS_BILLING = binding("DeveloperRead:User:alice", BILLING);
     private static final AclBinding ALICE_READS_PAYMENTS = binding("DeveloperRead:User:alice", PAYMENTS);
     private static final AclBinding BOB_READS_ORDERS = new AclBinding(literal(TOPIC, "billing.orders"),
@@ -265,6 +268,56 @@ class RbacAuthorizerDelegationTest {
         assertTrue(refused.getMessage().startsWith("User:frank may not delete "), refused.getMessage());
         assertEquals(List.of(), mutator.created);
         assertEquals(List.of(), mutator.deleted);
+    }
+
+    // --- a role is not a way to become a super user ------------------------------------------------------
+
+    static List<ApiKeys> keptForSystemAdmin() {
+        return KEPT_FOR_SYSTEM_ADMIN;
+    }
+
+    @ParameterizedTest
+    @MethodSource("keptForSystemAdmin")
+    void noRoleButSystemAdminGrantsAlterOnTheClusterForARequestThatChangesWhoCanAuthenticate(ApiKeys api) {
+        start(ERIN_ADMINISTERS, FRANK_RUNS_THE_CLUSTER, GRACE_ALTERS_THE_CLUSTER,
+                record(binding("ClusterAdmin:User:heidi", THE_CLUSTER)),
+                record(binding("SystemAdmin:User:heidi", THE_CLUSTER)));
+
+        assertEquals(DENIED, gate("frank", ALTER, api));
+        assertEquals(ALLOWED, gate("erin", ALTER, api));
+        assertEquals(ALLOWED, gate("heidi", ALTER, api));
+        // What the ACLs allow is not touched: an ordinary ACL, and a super user.
+        assertEquals(ALLOWED, gate("grace", ALTER, api));
+        assertEquals(ALLOWED, gate("admin", ALTER, api));
+        assertEquals(DENIED, gate("bob", ALTER, api));
+
+        assertEquals(DENIED, anyCluster("frank", api));
+        assertEquals(ALLOWED, anyCluster("erin", api));
+        assertEquals(ALLOWED, anyCluster("grace", api));
+
+        // The other questions of the same request are answered as before.
+        assertEquals(ALLOWED, gate("frank", DESCRIBE, api));
+    }
+
+    @ParameterizedTest
+    @MethodSource("keptForSystemAdmin")
+    void aDenyAclBeatsASystemAdminThereToo(ApiKeys api) {
+        start(ERIN_ADMINISTERS, deny("User:erin", THE_CLUSTER, ALTER, "*"));
+
+        assertEquals(DENIED, gate("erin", ALTER, api));
+        assertEquals(DENIED, anyCluster("erin", api));
+    }
+
+    @Test
+    void aClusterAdminKeepsAlterOnTheClusterForEveryOtherRequest() {
+        start(FRANK_RUNS_THE_CLUSTER);
+
+        for (ApiKeys api : ApiKeys.values()) {
+            if (!KEPT_FOR_SYSTEM_ADMIN.contains(api)) {
+                assertEquals(ALLOWED, gate("frank", ALTER, api), api.toString());
+                assertEquals(ALLOWED, anyCluster("frank", api), api.toString());
+            }
+        }
     }
 
     // --- AC2: a malformed binding is refused, whoever asks ----------------------------------
@@ -702,6 +755,11 @@ class RbacAuthorizerDelegationTest {
     /** The broker's check before a request to the ACL API: the operation on the cluster. */
     private AuthorizationResult gate(String user, AclOperation operation, ApiKeys api) {
         return ask(user, api, operation, THE_CLUSTER);
+    }
+
+    /** The broker's other question: {@code ALTER} on some cluster resource, for a request of that type. */
+    private AuthorizationResult anyCluster(String user, ApiKeys api) {
+        return authorizer.authorizeByResourceType(RequestContext.of(user, "admin-1", api), ALTER, CLUSTER);
     }
 
     private AuthorizationResult ask(String user, ApiKeys api, AclOperation operation, ResourcePattern resource) {
