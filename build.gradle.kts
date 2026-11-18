@@ -1,10 +1,12 @@
 plugins {
     java
+    `maven-publish`
     id("me.champeau.jmh") version "0.7.3"
 }
 
 group = "dev.kfkit"
-version = "0.1.0-SNAPSHOT"
+// The version is in gradle.properties; a release sets it from the tag with
+// -Pversion=X.Y.Z, which only works while this file does not assign it.
 
 // The broker provides the Kafka classes at runtime. Compile against the
 // newest supported release.
@@ -14,6 +16,9 @@ java {
     toolchain {
         languageVersion = JavaLanguageVersion.of(17)
     }
+    // What Maven Central asks for next to the jar.
+    withSourcesJar()
+    withJavadocJar()
 }
 
 repositories {
@@ -76,5 +81,52 @@ tasks.jar {
             "Implementation-Version" to project.version,
             "Implementation-Vendor" to "kfkit",
         )
+    }
+}
+
+tasks.javadoc {
+    (options as StandardJavadocDocletOptions).apply {
+        encoding = "UTF-8"
+        addBooleanOption("Xdoclint:all,-missing", true)
+        addBooleanOption("Werror", true)
+    }
+}
+
+// ./gradlew publishToMavenLocal: the jar, the sources, the javadoc and a POM
+// with what Maven Central requires. Nothing publishes to Central yet.
+publishing {
+    publications {
+        create<MavenPublication>("maven") {
+            from(components["java"])
+            pom {
+                name = "kfkrbac"
+                description = "Role-based access control for Apache Kafka: the broker's " +
+                    "StandardAuthorizer plus roles and role bindings."
+                url = "https://github.com/kfkit/kfkrbac"
+                licenses {
+                    license {
+                        name = "Apache-2.0"
+                        url = "https://www.apache.org/licenses/LICENSE-2.0.txt"
+                        distribution = "repo"
+                    }
+                }
+                developers {
+                    developer {
+                        id = "iabramov"
+                        name = "Ivan Abramov"
+                        url = "https://github.com/iabramov"
+                    }
+                }
+                scm {
+                    url = "https://github.com/kfkit/kfkrbac"
+                    connection = "scm:git:https://github.com/kfkit/kfkrbac.git"
+                    developerConnection = "scm:git:ssh://git@github.com/kfkit/kfkrbac.git"
+                }
+                issueManagement {
+                    system = "GitHub"
+                    url = "https://github.com/kfkit/kfkrbac/issues"
+                }
+            }
+        }
     }
 }
