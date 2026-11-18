@@ -130,6 +130,9 @@ dependencies {
     // goes into the jar; a bundled jakarta.* breaks the worker.
     compileOnly("org.apache.kafka:connect-api:$kafkaVersion")
     compileOnly("jakarta.ws.rs:jakarta.ws.rs-api:$jakartaRsVersion")
+    // Jackson is in libs/ of the Kafka distribution too, from 4.1 on: the command reads
+    // the files of apply and import with its streaming parser (jackson-core), and with
+    // nothing that 2.19, which Kafka 4.1 has, does not have.
     compileOnly("com.fasterxml.jackson.core:jackson-databind:$jacksonVersion")
     // Inside the jar, see tasks.jar: not a dependency of what is published.
     compileOnly(files(relocatedKfkwho))
@@ -193,8 +196,9 @@ testing {
                     dependsOn(tasks.jar)
                     inputs.files(tasks.jar)
                     inputs.property("brokerVersion", brokerVersion)
-                    // DocsIT runs the commands of these pages: a change to a page alone reruns it.
-                    inputs.files(fileTree("docs") { include("*.md") })
+                    // DocsIT runs the commands of these pages, and ApplyImportBrokerIT imports the
+                    // example files: a change to one of them alone reruns the suite.
+                    inputs.files(fileTree("docs") { include("*.md", "examples/*") })
                         .withPropertyName("docs")
                         .withPathSensitivity(PathSensitivity.RELATIVE)
                     outputs.dir(brokerLogs)

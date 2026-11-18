@@ -770,7 +770,7 @@ class RbacCommandTest {
 
         assertEquals(new Ran(0, RbacCommand.help(), ""), ran);
         assertTrue(ran.out().contains("kafka-run-class.sh dev.kfkit.kfkrbac.RbacCommand"));
-        assertTrue(ran.out().contains("Exit status: 0 done, 1 refused by the cluster or failed, 2 wrong usage."));
+        assertTrue(ran.out().contains("Exit status: 0 done, 1 refused by the cluster or failed, 2 wrong usage or"));
         for (RbacCommand.Verb verb : RbacCommand.Verb.values()) {
             assertTrue(ran.out().contains("\n  " + verb.word + " "), verb.word);
             assertTrue(ran.out().contains(verb.usage()), verb.word);
@@ -808,12 +808,16 @@ class RbacCommandTest {
                 List.of("group remove", "--group", "payments", "--member", "User:alice"),
                 List.of("group list"),
                 List.of("who-can", "--operation", "Read", "--topic", "billing.orders"),
-                List.of("what-can", "--principal", "User:alice"));
+                List.of("what-can", "--principal", "User:alice"),
+                List.of("apply", "--file", "docs/examples/apply.json"),
+                List.of("import", "--file", "docs/examples/role-bindings.json", "--format", "role-bindings",
+                        "--cluster-id", "cluster-1"));
     }
 
     static Stream<List<String>> readingVerbs() {
         return Stream.concat(everyVerbUsedWell().filter(command -> !command.get(0).endsWith("bind")
-                && !command.get(0).equals("group add") && !command.get(0).equals("group remove")), Stream.of(
+                && !command.get(0).equals("group add") && !command.get(0).equals("group remove")
+                && !command.get(0).equals("apply") && !command.get(0).equals("import")), Stream.of(
                 List.of("group list", "--group", "payments", "--output", "json"),
                 List.of("list", "--output", "json"),
                 List.of("list", "--role", "DeveloperRead", "--member", "User:alice", "--prefix", "billing."),

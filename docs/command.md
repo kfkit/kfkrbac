@@ -1,7 +1,9 @@
 # The command
 
-`RbacCommand` manages role bindings and groups in an operator's own terms
-and answers two questions: who can do this, and what may this principal do. It is a
+`RbacCommand` manages role bindings and groups in an operator's own terms,
+answers two questions, who can do this and what may this principal do,
+keeps bindings in a file, and brings bindings over from a file of another
+shape. It is a
 class in the same jar as the authorizer, run with the script the Kafka
 distribution ships:
 
@@ -19,10 +21,8 @@ everything it does can be done with the ACL tool as well: a binding is an
 ACL record ([roles.md](roles.md)), and so is a membership of a group
 ([groups.md](groups.md)). The command is a convenience, never the only way.
 
-> Status: `bind`, `unbind`, `list`, `group add`, `group remove`,
-> `group list`, `who-can` and `what-can` exist, and run against real brokers
-> of every supported release in the integration suite. `apply` and `import`
-> do not exist yet.
+> Status: every verb of the table exists, and runs against real brokers of
+> every supported release in the integration suite.
 
 | Verb | Does |
 |---|---|
@@ -34,6 +34,8 @@ ACL record ([roles.md](roles.md)), and so is a membership of a group
 | [`group list`](#group-list) | lists the groups and their members |
 | [`who-can`](#who-can) | who may do an operation on a resource, and why |
 | [`what-can`](#what-can) | what a principal may do, and why |
+| [`apply`](#apply) | makes the bindings and the groups of the cluster those of a file |
+| [`import`](#import) | writes the bindings of a file that has another shape |
 
 ## Options of every verb
 
@@ -53,7 +55,7 @@ and `group list` are verbs of two words.
 |---|---|
 | 0 | done |
 | 1 | the cluster refused, or the call failed; the reason the cluster returned is printed |
-| 2 | wrong usage; what is wrong and the usage of the verb are printed |
+| 2 | wrong usage: what is wrong and the usage of the verb are printed; or a file that `apply` or `import` cannot read as what it must be: the place and the field are printed |
 
 The examples below leave out `--bootstrap-server` and `--command-config`,
 and write `rbac` for `kafka-run-class.sh dev.kfkit.kfkrbac.RbacCommand`.
@@ -458,6 +460,148 @@ User:erin may do nothing, by the roles and the ACLs.
 Not counted: what the brokers' own settings allow (super.users, allow.everyone.if.no.acl.found).
 ```
 
+## apply
+
+Keeps the bindings and the groups in a file: `apply` compares the file with
+the cluster, prints the difference and makes the cluster match. It creates
+what is in the file and not in the cluster, and deletes the bindings and the
+memberships that are in the cluster and not in the file.
+
+```console
+$ rbac apply --file access.json --dry-run
++ membership of User:alice in Group:payments
++ binding DeveloperRead to Group:payments on prefix billing.
++ binding ClusterAdmin to User:carol on the cluster
+- membership of User:dave in Group:audit
+- binding DeveloperWrite to User:bob on name orders
+Would create 3 and delete 2. Nothing was changed.
+$ rbac apply --file access.json
++ membership of User:alice in Group:payments
++ binding DeveloperRead to Group:payments on prefix billing.
++ binding ClusterAdmin to User:carol on the cluster
+- membership of User:dave in Group:audit
+- binding DeveloperWrite to User:bob on name orders
+Created 3, deleted 2.
+$ rbac apply --file access.json
+Nothing to change: the cluster has what the file has.
+```
+
+| Option | Meaning |
+|---|---|
+| `--file <file>` | the JSON file; required |
+| `--dry-run` | print the difference and change nothing |
+| `--no-delete` | only create: delete nothing |
+
+### The file
+
+The file is what the command itself prints. It is one JSON object with two
+fields, each optional:
+
+| Field | Value |
+|---|---|
+| `bindings` | the array that `list --output json` prints: one object for each binding, with `role`, `member`, `resourceType`, `name` and `patternType` ([JSON](#json)) |
+| `groups` | the array that `group list --output json` prints: one object for each membership, with `group` and `member` ([group list](#group-list)) |
+
+```json
+{
+  "bindings": [
+    {"role":"DeveloperRead","member":"Group:payments","resourceType":"TOPIC","name":"billing.","patternType":"PREFIXED"},
+    {"role":"DeveloperWrite","member":"User:bob","resourceType":"TOPIC","name":"orders","patternType":"LITERAL"},
+    {"role":"ClusterAdmin","member":"User:carol","resourceType":"CLUSTER","name":"kafka-cluster","patternType":"LITERAL"}
+  ],
+  "groups": [
+    {"group":"payments","member":"User:alice"}
+  ]
+}
+```
+
+That is [examples/apply.json](examples/apply.json). A file of a cluster as
+it is now is the two listings put together:
+
+```bash
+{
+  echo '{"bindings":'
+  rbac list --output json
+  echo ',"groups":'
+  rbac group list --output json
+  echo '}'
+} > access.json
+```
+
+The array of `list --output json` alone is a file too: it is the bindings,
+as if it were the object with `bindings` only.
+
+- **A field the file does not have is not touched.** A file with `bindings`
+  only creates and deletes bindings and leaves every membership as it is; a
+  file with `groups` only does the reverse. An empty array is different: it
+  says there are to be none, and all of them are deleted.
+- **Ordinary ACLs are never touched**, whatever their principal: not the
+  ACLs that name a user, not the `ALLOW` ACLs of a group. Neither is a
+  record that looks like a binding or a membership and is not one; `apply`
+  names it in a warning, as `list` does.
+- **Other fields of an object are ignored**, so a file made from a later
+  `list --output json`, which may have gained fields, still applies. Another
+  field of the file itself, next to `bindings` and `groups`, is refused.
+- **`--no-delete` only adds.** What is in the cluster and not in the file is
+  printed as `not in the file, and left`, and stays.
+
+```console
+$ rbac apply --file access.json --no-delete
++ binding DeveloperRead to Group:payments on prefix billing.
+  not in the file, and left: membership of User:dave in Group:audit
+  not in the file, and left: binding DeveloperWrite to User:bob on name orders
+Created 1, deleted 0; 2 not in the file left as they are, as --no-delete says.
+```
+
+### What it does to the cluster
+
+`apply` lists the ACLs once, creates everything there is to create in one
+request and then deletes everything there is to delete in one request, each
+record by a filter that matches it and nothing else. The cluster decides
+whether the caller may, as for `bind` and `unbind`: the authorizer applies
+a request as a whole or not at all, so a refused creation creates nothing
+and nothing is deleted after it, and the status is 1 with the cluster's
+reason. Running `apply` again brings the cluster to the file from wherever
+it is.
+
+A file that is not valid JSON, lacks a field or has a binding that the
+record format does not allow is refused before the cluster is asked
+anything, with the place and the field, and the status is 2:
+
+```console
+$ rbac apply --file access.json
+error: access.json: line 4, column 5: bindings[1]: "name" is required
+$ echo $?
+2
+```
+
+## import
+
+Writes the bindings of a file that has another shape than the command's
+own: a list of bindings of named roles, or a list of roles that are sets of
+ACLs. The two shapes, field by field, what each becomes and what is skipped
+are in [import.md](import.md).
+
+```console
+$ rbac import --file docs/examples/role-acls.json --format role-acls --dry-run
++ membership of User:alice in Group:orders-readers
++ membership of User:bob in Group:orders-readers
++ ACL allow Group:orders-readers Read on topic orders
++ ACL allow Group:orders-readers Read on groups with prefix orders-
+skipped [1] (line 10) role billing-writers: it has a DENY ACL ([1].acls[1] (line 15)), and a group cannot be denied: a DENY ACL names the users; nothing of the role is written
+Would write 4 records; skipped 1. Nothing was changed.
+```
+
+| Option | Meaning |
+|---|---|
+| `--file <file>` | the JSON file; required |
+| `--format role-bindings\|role-acls` | the shape of the file; required |
+| `--cluster-id <id>` | for `role-bindings`: only the bindings for that Kafka cluster, and those that name none |
+| `--dry-run` | print what would be written and what is skipped, and change nothing |
+
+What cannot be written as the file has it is skipped and reported, never
+guessed. `import` only adds.
+
 ## Wrong usage
 
 What is wrong is printed first, then the usage of the verb, on standard
@@ -479,7 +623,10 @@ $ echo $?
 
 The cluster decides, as it does for the ACL tool. `list`, `who-can`,
 `what-can` and `group list` list the ACLs: whoever may describe the cluster,
-and a `ResourceOwner`. `bind` and `unbind` create and delete one ACL record:
+and a `ResourceOwner`. `apply` lists them too, and then creates and deletes
+bindings and memberships as `bind`, `unbind`, `group add` and `group remove`
+do, by the same rules; `import` creates bindings, or memberships and
+ordinary ACLs, and lists nothing. `bind` and `unbind` create and delete one ACL record:
 a principal the ACLs allow to alter the cluster and a `SystemAdmin` any
 binding, a `ResourceOwner` bindings inside what it owns, everyone else
 none. `group add` and `group remove` create and delete one membership
