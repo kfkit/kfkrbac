@@ -6,8 +6,10 @@ One jar, one line of configuration, free and open source.
 
 > Status: pre-alpha, not released. The authorizer reads role bindings from
 > ACL records and decides with them, in unit tests against the real
-> `StandardAuthorizer`; it has not run on a broker. Who may bind what is not
-> enforced yet: whoever may create ACLs may create a binding. Groups, the
+> `StandardAuthorizer`; it has not run on a broker. Who may bind what is
+> decided when an ACL record is created or deleted: whoever the ACLs allow
+> to alter the cluster, or a `SystemAdmin`, anything; a `ResourceOwner`
+> bindings inside what it owns; everyone else nothing. Groups, the
 > command and the extensions for schemas and connectors do not exist. What
 > is described below is the design, not something you can install.
 
@@ -42,8 +44,8 @@ topic, a prefix or the whole cluster.
   our own makes it shorter and answers "who can read this topic".
 - Delegation: the owner of a prefix hands out roles inside it, and nowhere
   else.
-- Schemas and connectors: the same jar plugs into Kafka Connect and a schema
-  registry and applies the same bindings there.
+- Connectors: the same jar plugs into Kafka Connect and applies the same
+  bindings there.
 - Access metrics on request: the per-principal, per-client, per-topic
   metrics of [kfkwho](https://github.com/kfkit/kfkwho), with its exporter
   rules and dashboard unchanged. Off by default.
