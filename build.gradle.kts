@@ -23,6 +23,7 @@ dependencies {
     compileOnly("org.apache.kafka:kafka-metadata:$kafkaVersion")
     compileOnly("org.apache.kafka:kafka-clients:$kafkaVersion")
     compileOnly("org.apache.kafka:kafka-server-common:$kafkaVersion")
+    compileOnly("org.slf4j:slf4j-api:2.0.20")
 
     testImplementation("org.apache.kafka:kafka-metadata:$kafkaVersion")
     testImplementation("org.apache.kafka:kafka-clients:$kafkaVersion")
