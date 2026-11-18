@@ -437,23 +437,23 @@ class RbacAuthorizerTest {
                 WRITE, ResourceType.TOPIC);
     }
 
-    private static ResourcePattern literal(ResourceType type, String name) {
+    static ResourcePattern literal(ResourceType type, String name) {
         return new ResourcePattern(type, name, PatternType.LITERAL);
     }
 
-    private static ResourcePattern prefixed(ResourceType type, String name) {
+    static ResourcePattern prefixed(ResourceType type, String name) {
         return new ResourcePattern(type, name, PatternType.PREFIXED);
     }
 
-    private static StandardAcl allow(String principal, ResourcePattern resource, AclOperation operation) {
+    static StandardAcl allow(String principal, ResourcePattern resource, AclOperation operation) {
         return acl(principal, resource, operation, "*", AclPermissionType.ALLOW);
     }
 
-    private static StandardAcl deny(String principal, ResourcePattern resource, AclOperation operation, String host) {
+    static StandardAcl deny(String principal, ResourcePattern resource, AclOperation operation, String host) {
         return acl(principal, resource, operation, host, AclPermissionType.DENY);
     }
 
-    private static StandardAcl acl(String principal, ResourcePattern resource, AclOperation operation, String host,
+    static StandardAcl acl(String principal, ResourcePattern resource, AclOperation operation, String host,
             AclPermissionType permission) {
         return new StandardAcl(resource.resourceType(), resource.name(), resource.patternType(), principal, host,
                 operation, permission);
@@ -468,7 +468,7 @@ class RbacAuthorizerTest {
     }
 
     /** What the code writes to standard error while it runs: where the test logger writes. */
-    private static String stderrOf(Runnable code) {
+    static String stderrOf(Runnable code) {
         PrintStream original = System.err;
         ByteArrayOutputStream captured = new ByteArrayOutputStream();
         System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));

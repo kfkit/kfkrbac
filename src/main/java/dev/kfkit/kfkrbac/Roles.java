@@ -32,8 +32,8 @@ import org.apache.kafka.server.authorizer.Action;
  * ever adds access: deny ACLs are checked by the authorizer, not here. Both
  * methods run on the broker's request path: in memory, no I/O, no blocking.
  *
- * <p>Which roles exist and how bindings are read from ACL records are
- * decided elsewhere; until then the authorizer runs with {@link #NONE}.
+ * <p>On a broker this is {@link BindingIndex}: the bindings among the ACL
+ * records of the cluster.
  */
 interface Roles {
 
