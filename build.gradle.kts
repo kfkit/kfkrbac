@@ -1,5 +1,6 @@
 plugins {
     java
+    `jvm-test-suite`
     `maven-publish`
     id("me.champeau.jmh") version "0.7.3"
 }
@@ -11,6 +12,9 @@ group = "dev.kfkit"
 // The broker provides the Kafka classes at runtime. Compile against the
 // newest supported release.
 val kafkaVersion = "4.4.0"
+
+// The broker image the integration tests run the jar on: -PbrokerVersion=4.1.2.
+val brokerVersion = providers.gradleProperty("brokerVersion").getOrElse(kafkaVersion)
 
 java {
     toolchain {
@@ -43,6 +47,63 @@ dependencies {
     jmh("org.apache.kafka:kafka-metadata:$kafkaVersion")
     jmh("org.apache.kafka:kafka-clients:$kafkaVersion")
     jmh("org.apache.kafka:kafka-server-common:$kafkaVersion")
+}
+
+testing {
+    suites {
+        // Real brokers in containers with the built jar as their authorizer:
+        // ./gradlew integrationTest. Not part of build or check unless
+        // -PintegrationTest is set; CI runs the one-node tests once per
+        // supported broker release and the cluster tests on the newest.
+        register<JvmTestSuite>("integrationTest") {
+            useJUnitJupiter("6.1.3")
+            dependencies {
+                implementation("org.apache.kafka:kafka-clients:$kafkaVersion")
+                implementation("org.testcontainers:testcontainers:2.0.5")
+                runtimeOnly("org.slf4j:slf4j-simple:2.0.20")
+            }
+            targets.all {
+                testTask.configure {
+                    val brokerLogs = layout.buildDirectory.dir("integration-logs")
+                    dependsOn(tasks.jar)
+                    inputs.files(tasks.jar)
+                    inputs.property("brokerVersion", brokerVersion)
+                    outputs.dir(brokerLogs)
+                    systemProperty("kfkrbac.it.jar", tasks.jar.get().archiveFile.get().asFile.absolutePath)
+                    systemProperty("kfkrbac.it.image", "apache/kafka:$brokerVersion")
+                    systemProperty("kfkrbac.it.logs", brokerLogs.get().asFile.absolutePath)
+                    // The clients' own chatter; what a broker said is in build/integration-logs.
+                    systemProperty("org.slf4j.simpleLogger.defaultLogLevel", "warn")
+                    testLogging {
+                        events("passed", "skipped", "failed")
+                        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+                        showStandardStreams = false
+                    }
+                    // A skipped test shows as SKIPPED without its reason; say it.
+                    addTestListener(object : TestListener {
+                        override fun beforeSuite(suite: TestDescriptor) {}
+                        override fun beforeTest(testDescriptor: TestDescriptor) {}
+                        override fun afterTest(testDescriptor: TestDescriptor, result: TestResult) {}
+                        override fun afterSuite(suite: TestDescriptor, result: TestResult) {
+                            if (suite.parent == null && result.skippedTestCount > 0) {
+                                logger.warn(
+                                    "integrationTest: {} of {} tests skipped. They skip for one reason only: "
+                                        + "Docker is not available.",
+                                    result.skippedTestCount, result.testCount,
+                                )
+                            }
+                        }
+                    })
+                }
+            }
+        }
+    }
+}
+
+if (providers.gradleProperty("integrationTest").isPresent) {
+    tasks.check {
+        dependsOn(testing.suites.named("integrationTest"))
+    }
 }
 
 // The code JMH generates is not ours to keep free of warnings.
