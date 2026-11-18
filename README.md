@@ -4,9 +4,10 @@ Role-based access control for Apache Kafka®: an authorizer that grants access
 through roles and role bindings, on top of the ACLs the broker already has.
 One jar, one line of configuration, free and open source.
 
-> Status: pre-alpha, not released. The skeleton compiles and behaves exactly
-> like `StandardAuthorizer`; roles do not exist yet. What is described below
-> is the design, not something you can install.
+> Status: pre-alpha, not released. The authorizer can tell a deny ACL from
+> no ACL and lets a role grant only the second, but no roles can be defined
+> or bound yet, so it behaves exactly like `StandardAuthorizer`. What is
+> described below is the design, not something you can install.
 
 ## Why
 
@@ -28,6 +29,28 @@ topic, a prefix or the whole cluster.
 - Access metrics on request: the per-principal, per-client, per-topic
   metrics of [kfkwho](https://github.com/kfkit/kfkwho), with its exporter
   rules and dashboard unchanged. Off by default.
+
+## How a request is decided
+
+For every resource of every request, the broker asks the authorizer two
+questions, and both are answered the same way:
+
+1. The ACLs first, exactly as `StandardAuthorizer` answers them. What they
+   allow is allowed, and the roles are not consulted at all: a request an
+   ACL allows costs what it costs today.
+2. If the ACLs did not allow it and a deny ACL matches it, it is denied. A
+   deny ACL beats every role.
+3. Otherwise it is allowed when a role bound to the principal covers it,
+   and denied when none does or the roles cannot be read.
+
+The second question, "may this principal do this on any resource of the
+type", is what an idempotent producer is asked for `WRITE` on topics before
+it sends anything. A role answers it with yes when it covers some resource
+that no deny ACL of the principal covers entirely.
+
+With `allow.everyone.if.no.acl.found=true` the ACLs already allow whatever
+no ACL names, so roles add nothing there. Leave it at its default, `false`,
+to use roles.
 
 ## Installation, as designed
 
