@@ -22,6 +22,12 @@ topic, a prefix or the whole cluster.
 - `dev.kfkit.kfkrbac.RbacAuthorizer`: the broker's `StandardAuthorizer` plus
   roles. The ACLs you have keep working, and nothing changes until the first
   role is bound.
+- Seven roles, under names operators already use where such a name exists:
+  `DeveloperRead`, `DeveloperWrite`, `DeveloperManage`, `ResourceOwner` and
+  `ResourceViewer`, bound to a name pattern; `ClusterAdmin` and
+  `SystemAdmin`, bound to the cluster. What each grants on topics, groups,
+  transactional IDs, the cluster, subjects and connectors is in
+  [docs/roles.md](docs/roles.md).
 - Roles only add access. What an ACL denies stays denied; a request no ACL
   allows is allowed when a role bound to its principal covers it.
 - One binding for one application: a role bound to the prefix `billing.`

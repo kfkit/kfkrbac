@@ -60,6 +60,10 @@ jmh {
 
 tasks.test {
     useJUnitPlatform()
+    // RoleTest compares these with the code: a change to them alone reruns it.
+    inputs.files("docs/roles.md", "README.md")
+        .withPropertyName("docs")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
     testLogging {
         events("passed", "skipped", "failed")
     }
