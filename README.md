@@ -149,9 +149,9 @@ Leave the setting at its default, `false`, to use roles.
   kfkwho's names, for what is built on those. kfkrbac's own metrics are
   three gauges, in [Bindings](docs/bindings.md#a-record-that-is-not-a-binding)
   and [Kafka Connect](docs/connect.md#before-the-bindings-are-read-and-when-they-cannot-be).
-- **Not on Maven Central yet.** A release is a GitHub Release with a signed
-  jar; `./gradlew publishToMavenLocal` makes the artifacts Maven Central
-  asks for.
+- **Not on Maven Central yet.** A release is a signed jar on the releases
+  page of this repository; `./gradlew publishToMavenLocal` makes the
+  artifacts Maven Central asks for.
 - **No roles of your own.** There are the seven. A set of permissions that
   none of them names is given with ordinary ACLs to a
   [group](docs/groups.md#an-acl-for-a-group).
