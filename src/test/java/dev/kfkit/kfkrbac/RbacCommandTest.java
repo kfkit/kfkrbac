@@ -509,7 +509,7 @@ class RbacCommandTest {
                 literal(TRANSACTIONAL_ID, "billing.orders"), THE_CLUSTER);
         int allowed = 0;
         int asked = 0;
-        try (Access access = new Access(cluster.records, Identities.SELF, null)) {
+        try (Access access = new Access(cluster.records, null)) {
             for (ResourcePattern resource : resources) {
                 for (AclOperation operation : Role.everyAclOperation()) {
                     Map<String, Boolean> said = new HashMap<>();
@@ -615,7 +615,7 @@ class RbacCommandTest {
         Set<String> all = new HashSet<>();
         Role.everyAclOperation().forEach(operation -> all.add(Wording.operation(operation)));
         Map<String, Set<String>> may = new HashMap<>();
-        try (Access access = new Access(cluster.records, Identities.SELF, InetAddress.getByName("192.0.2.9"))) {
+        try (Access access = new Access(cluster.records, InetAddress.getByName("192.0.2.9"))) {
             KafkaPrincipal alice = new KafkaPrincipal(KafkaPrincipal.USER_TYPE, "alice");
             for (Access.Line line : access.granted(alice)) {
                 may.computeIfAbsent(line.on(), on -> new HashSet<>())
@@ -750,7 +750,7 @@ class RbacCommandTest {
         List<String> command = everyVerbUsedWell().filter(used -> used.get(0).equals(verb.word)).findFirst()
                 .orElseThrow();
 
-        Ran ran = ran(command.toArray(new String[0]));
+        Ran ran = ran(typed(command.get(0), command.subList(1, command.size())));
 
         assertEquals(new Ran(2, "", "--bootstrap-server is required\n\n" + verb.usage()), ran);
         assertNull(connectedWith);
@@ -793,7 +793,7 @@ class RbacCommandTest {
     @ParameterizedTest
     @EnumSource(RbacCommand.Verb.class)
     void helpOfAVerbPrintsItsUsageAndDoesNothing(RbacCommand.Verb verb) {
-        assertEquals(new Ran(0, verb.usage(), ""), ran(verb.word, "--help"));
+        assertEquals(new Ran(0, verb.usage(), ""), ran(typed(verb.word, List.of("--help"))));
         assertNull(connectedWith);
     }
 
@@ -804,12 +804,17 @@ class RbacCommandTest {
                 List.of("bind", "--role", "DeveloperRead", "--member", "User:bob", "--prefix", "billing."),
                 List.of("unbind", "--role", "DeveloperRead", "--member", "User:alice", "--prefix", "billing."),
                 List.of("list"),
+                List.of("group add", "--group", "payments", "--member", "User:bob"),
+                List.of("group remove", "--group", "payments", "--member", "User:alice"),
+                List.of("group list"),
                 List.of("who-can", "--operation", "Read", "--topic", "billing.orders"),
                 List.of("what-can", "--principal", "User:alice"));
     }
 
     static Stream<List<String>> readingVerbs() {
-        return Stream.concat(everyVerbUsedWell().filter(command -> !command.get(0).endsWith("bind")), Stream.of(
+        return Stream.concat(everyVerbUsedWell().filter(command -> !command.get(0).endsWith("bind")
+                && !command.get(0).equals("group add") && !command.get(0).equals("group remove")), Stream.of(
+                List.of("group list", "--group", "payments", "--output", "json"),
                 List.of("list", "--output", "json"),
                 List.of("list", "--role", "DeveloperRead", "--member", "User:alice", "--prefix", "billing."),
                 List.of("who-can", "--operation", "Describe", "--group", "billing.orders", "--host", "192.0.2.7"),
@@ -919,11 +924,17 @@ class RbacCommandTest {
 
     private Ran run(String verb, List<String> options) {
         List<String> args = new ArrayList<>();
-        args.add(verb);
         args.add("--bootstrap-server");
         args.add("localhost:9092");
         args.addAll(options);
-        return ran(args.toArray(new String[0]));
+        return ran(typed(verb, args));
+    }
+
+    /** A verb, which may be two words, and its options, as they are typed. */
+    private static String[] typed(String verb, List<String> options) {
+        List<String> args = new ArrayList<>(List.of(verb.split(" ")));
+        args.addAll(options);
+        return args.toArray(new String[0]);
     }
 
     /** Runs the command exactly as typed. */

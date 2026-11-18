@@ -43,8 +43,8 @@ import org.apache.kafka.common.resource.ResourceType;
 import org.apache.kafka.common.security.auth.KafkaPrincipal;
 
 /**
- * The command: role bindings in an operator's own terms, and the answer to
- * "who can do this" and "what may this principal do".
+ * The command: role bindings and groups in an operator's own terms, and the
+ * answer to "who can do this" and "what may this principal do".
  *
  * <p>Run it with the distribution's
  * {@code kafka-run-class.sh dev.kfkit.kfkrbac.RbacCommand <verb> ...}, with
@@ -71,6 +71,9 @@ public final class RbacCommand {
     private static final String BOOTSTRAP_SERVER = "--bootstrap-server";
     private static final String COMMAND_CONFIG = "--command-config";
     private static final String HELP = "--help";
+
+    /** The first word of the verbs that manage groups. */
+    private static final String GROUP = "group";
 
     private static final String CONNECTION = String.join(System.lineSeparator(),
             "  --bootstrap-server <host:port,...>  the cluster to connect to; required",
@@ -132,6 +135,45 @@ public final class RbacCommand {
                         "                             has them; text by default");
             }
         },
+        GROUP_ADD("group add", "put a member in a group",
+                Set.of("--group", "--member"), Set.of(),
+                "--group <name> --member <type:name>") {
+            @Override
+            String explanation() {
+                return String.join(System.lineSeparator(),
+                        "Puts a member in a group: it then holds the roles bound to the group, and the ALLOW ACLs",
+                        "that name the group apply to it. A group is not created: it is there for as long as it",
+                        "has a member. Adding who is in it already changes nothing.",
+                        "",
+                        "  --group <name>             the name of the group, without Group: in front: payments",
+                        "  --member <type:name>       who joins it: User:alice; a group is not a member of a group");
+            }
+        },
+        GROUP_REMOVE("group remove", "take a member out of a group",
+                GROUP_ADD.valued, GROUP_ADD.flags, GROUP_ADD.synopsis) {
+            @Override
+            String explanation() {
+                return String.join(System.lineSeparator(),
+                        "Takes a member out of a group, and nothing else: the bindings and the ACLs of the group",
+                        "stay. Fails when the member is not in the group.",
+                        "",
+                        "  --group <name>             the name of the group, without Group: in front: payments",
+                        "  --member <type:name>       who leaves it: User:alice");
+            }
+        },
+        GROUP_LIST("group list", "list the groups and their members",
+                Set.of("--group", "--output"), Set.of(),
+                "[--group <name>] [--output text|json]") {
+            @Override
+            String explanation() {
+                return String.join(System.lineSeparator(),
+                        "Lists the members of the groups, one membership on a line. Changes nothing.",
+                        "",
+                        "  --group <name>             only the members of that group",
+                        "  --output text|json         json: an array with one object for each membership, with",
+                        "                             group and member; text by default");
+            }
+        },
         WHO_CAN("who-can", "who may do an operation on a resource, and why",
                 Set.of("--operation", "--topic", "--group", "--transactional-id", "--host"), Set.of("--cluster"),
                 "--operation <operation>",
@@ -141,6 +183,7 @@ public final class RbacCommand {
                 return String.join(System.lineSeparator(),
                         "Names every principal a role or an ACL lets do the operation on the resource, with the",
                         "binding or the ACL that lets it, and every principal a deny ACL stops, with that ACL.",
+                        "A member of a group is named for what the group is given, with the group.",
                         "The answer is the one the authorizer gives for the ACL records of the cluster; what the",
                         "brokers' own settings allow (super.users, allow.everyone.if.no.acl.found) is not in it.",
                         "Changes nothing.",
@@ -160,11 +203,13 @@ public final class RbacCommand {
             @Override
             String explanation() {
                 return String.join(System.lineSeparator(),
-                        "Lists what the principal may do, with the binding or the ACL behind each line, and what",
-                        "a deny ACL takes away from it. What the brokers' own settings allow (super.users,",
-                        "allow.everyone.if.no.acl.found) is not in it. Changes nothing.",
+                        "Lists what the principal may do, itself and as a member of its groups, with the binding",
+                        "or the ACL behind each line, and what a deny ACL takes away from it. What the brokers'",
+                        "own settings allow (super.users, allow.everyone.if.no.acl.found) is not in it. Changes",
+                        "nothing.",
                         "",
-                        "  --principal <type:name>    the principal: User:alice; User:* is what everyone may do",
+                        "  --principal <type:name>    the principal: User:alice; User:* is what everyone may do,",
+                        "                             Group:payments what that group gives its members",
                         "  --host <address>           the address the request comes from, for ACLs that name a",
                         "                             host; by default an address no ACL names");
             }
@@ -200,6 +245,7 @@ public final class RbacCommand {
                     .append(CONNECTION).append(System.lineSeparator()).toString();
         }
 
+        /** The verb of that word, or of those two: {@code list}, {@code group add}. */
         static Verb of(String word) {
             for (Verb verb : values()) {
                 if (verb.word.equals(word)) {
@@ -207,6 +253,11 @@ public final class RbacCommand {
                 }
             }
             return null;
+        }
+
+        /** How many words the verb is: {@code group add} is two. */
+        int words() {
+            return word.split(" ").length;
         }
 
         private static String roles(Role.Scope scope) {
@@ -248,7 +299,22 @@ public final class RbacCommand {
             out.print(help());
             return DONE;
         }
-        Verb verb = Verb.of(args[0]);
+        if (GROUP.equals(args[0]) && (args.length == 1 || Verb.of(GROUP + " " + args[1]) == null)) {
+            boolean asked = args.length > 1 && HELP.equals(args[1]);
+            PrintStream to = asked ? out : err;
+            if (!asked) {
+                err.println(GROUP + " is followed by add, remove or list"
+                        + (args.length == 1 ? "" : ", not by " + args[1]));
+                err.println();
+            }
+            to.print(Verb.GROUP_ADD.usage());
+            to.println();
+            to.print(Verb.GROUP_REMOVE.usage());
+            to.println();
+            to.print(Verb.GROUP_LIST.usage());
+            return asked ? DONE : WRONG_USAGE;
+        }
+        Verb verb = Verb.of(GROUP.equals(args[0]) ? GROUP + " " + args[1] : args[0]);
         if (verb == null) {
             err.println("Unknown verb: " + args[0]);
             err.println();
@@ -263,7 +329,8 @@ public final class RbacCommand {
             valued.add(COMMAND_CONFIG);
             Set<String> flags = new HashSet<>(verb.flags);
             flags.add(HELP);
-            Arguments arguments = Arguments.parse(Arrays.asList(args).subList(1, args.length), valued, flags);
+            Arguments arguments =
+                    Arguments.parse(Arrays.asList(args).subList(verb.words(), args.length), valued, flags);
             if (arguments.has(HELP)) {
                 out.print(verb.usage());
                 return DONE;
@@ -291,13 +358,13 @@ public final class RbacCommand {
     /** Every verb and every option. */
     static String help() {
         StringBuilder help = new StringBuilder(
-                "Role bindings for Apache Kafka: bind and list them, and ask who can do what.")
+                "Role bindings for Apache Kafka: bind and list them, manage groups, and ask who can do what.")
                 .append(System.lineSeparator()).append(System.lineSeparator())
                 .append("Usage: ").append(RUN).append(" <verb> --bootstrap-server <host:port> [options]")
                 .append(System.lineSeparator()).append(System.lineSeparator())
                 .append("Verbs:").append(System.lineSeparator());
         for (Verb verb : Verb.values()) {
-            help.append(String.format("  %-9s %s%n", verb.word, verb.summary));
+            help.append(String.format("  %-13s %s%n", verb.word, verb.summary));
         }
         help.append(System.lineSeparator())
                 .append("Exit status: 0 done, 1 refused by the cluster or failed, 2 wrong usage.")
@@ -316,6 +383,12 @@ public final class RbacCommand {
                 return unbind(arguments);
             case LIST:
                 return list(arguments);
+            case GROUP_ADD:
+                return groupAdd(arguments);
+            case GROUP_REMOVE:
+                return groupRemove(arguments);
+            case GROUP_LIST:
+                return groupList(arguments);
             case WHO_CAN:
                 return whoCan(arguments);
             default:
@@ -435,10 +508,7 @@ public final class RbacCommand {
         }
         String prefix = arguments.value("--prefix").orElse(null);
         String name = arguments.value("--name").orElse(null);
-        String output = arguments.value("--output").orElse("text");
-        if (!"text".equals(output) && !"json".equals(output)) {
-            throw new Arguments.WrongUsage("--output is text or json, not " + output);
-        }
+        boolean json = json(arguments);
         return (records, out, err) -> {
             List<AclBinding> all = everyRecord(records, err);
             List<String[]> rows = new ArrayList<>();
@@ -457,11 +527,8 @@ public final class RbacCommand {
                 rows.add(new String[] {binding.role().roleName(), binding.member().toString(), Wording.on(binding)});
                 objects.add(Wording.json(record, binding));
             }
-            if ("json".equals(output)) {
-                out.println(objects.isEmpty() ? "[]"
-                        : "[" + System.lineSeparator() + "  "
-                                + String.join("," + System.lineSeparator() + "  ", objects)
-                                + System.lineSeparator() + "]");
+            if (json) {
+                array(objects, out);
             } else if (rows.isEmpty()) {
                 out.println("No bindings.");
             } else {
@@ -470,6 +537,98 @@ public final class RbacCommand {
             }
             return DONE;
         };
+    }
+
+    // --- group add, group remove, group list -------------------------------------
+
+    private static Task groupAdd(Arguments arguments) throws Arguments.WrongUsage {
+        AclBinding record = membershipRecord(arguments);
+        return (records, out, err) -> {
+            records.create(List.of(record));
+            BindingCodec.Membership membership = membership(record);
+            out.println("Added " + membership.member() + " to " + membership.group());
+            return DONE;
+        };
+    }
+
+    private static Task groupRemove(Arguments arguments) throws Arguments.WrongUsage {
+        AclBinding record = membershipRecord(arguments);
+        return (records, out, err) -> {
+            BindingCodec.Membership membership = membership(record);
+            Collection<AclBinding> deleted = records.delete(List.of(record.toFilter()));
+            if (deleted.isEmpty()) {
+                err.println("error: no such membership: " + Wording.membership(membership));
+                return FAILED;
+            }
+            out.println("Removed " + membership.member() + " from " + membership.group());
+            return DONE;
+        };
+    }
+
+    private static Task groupList(Arguments arguments) throws Arguments.WrongUsage {
+        String group = arguments.value("--group").orElse(null);
+        if (group != null) {
+            groupName(group);
+        }
+        boolean json = json(arguments);
+        return (records, out, err) -> {
+            List<String[]> rows = new ArrayList<>();
+            List<String> objects = new ArrayList<>();
+            for (AclBinding record : everyRecord(records, err)) {
+                if (BindingCodec.decode(record) instanceof BindingCodec.Membership membership
+                        && (group == null || membership.group().getName().equals(group))) {
+                    rows.add(new String[] {membership.group().getName(), membership.member().toString()});
+                    objects.add(Wording.json(membership));
+                }
+            }
+            if (json) {
+                array(objects, out);
+            } else if (rows.isEmpty()) {
+                out.println(group == null ? "No groups."
+                        : BindingCodec.GROUP_PREFIX + group + " has no members.");
+            } else {
+                rows.add(0, new String[] {"GROUP", "MEMBER"});
+                table(rows, "", out);
+            }
+            return DONE;
+        };
+    }
+
+    /**
+     * The record of the membership the options describe. The codec that
+     * reads records says whether it is a membership the format allows, and
+     * it must read it back as what was asked for.
+     */
+    private static AclBinding membershipRecord(Arguments arguments) throws Arguments.WrongUsage {
+        String group = groupName(arguments.required("--group"));
+        String member = arguments.required("--member");
+        AclBinding record = BindingRecords.membership(group, member);
+        BindingCodec.Decoded decoded = BindingCodec.decode(record);
+        if (decoded instanceof BindingCodec.Malformed malformed) {
+            throw new Arguments.WrongUsage("Not a membership: " + malformed.reason());
+        }
+        if (!(decoded instanceof BindingCodec.Membership membership) || !membership.group().getName().equals(group)
+                || !membership.member().toString().equals(member)) {
+            throw new Arguments.WrongUsage("Not the membership asked for: " + member + " in the group " + group);
+        }
+        return record;
+    }
+
+    /** The name of a group as {@code --group} takes it: the name alone. */
+    private static String groupName(String group) throws Arguments.WrongUsage {
+        if (group.isEmpty()) {
+            throw new Arguments.WrongUsage("The name of the group is empty");
+        }
+        if (group.startsWith(BindingCodec.GROUP_PREFIX)) {
+            throw new Arguments.WrongUsage("--group is the name of the group, without " + BindingCodec.GROUP_PREFIX
+                    + " in front: " + group.substring(BindingCodec.GROUP_PREFIX.length()));
+        }
+        return group;
+    }
+
+    /** The membership a record stands for; the record was read back when it was made. */
+    private static BindingCodec.Membership membership(AclBinding record) {
+        return (BindingCodec.Membership) BindingCodec.decode(record);
     }
 
     // --- who-can, what-can -----------------------------------------------------
@@ -497,7 +656,7 @@ public final class RbacCommand {
         }
         InetAddress host = host(arguments);
         return (records, out, err) -> {
-            try (Access access = new Access(everyRecord(records, err), Identities.SELF, host)) {
+            try (Access access = new Access(everyRecord(records, err), host)) {
                 List<Access.Answer> answers = access.whoCan(operation, resource);
                 out.println(Wording.operation(operation) + " on " + Wording.resources(resource) + ":");
                 out.println();
@@ -506,12 +665,12 @@ public final class RbacCommand {
                 }
                 for (Access.Answer answer : answers) {
                     out.println(answer.principal() + "  " + (answer.allowed() ? "allowed" : "denied"));
-                    for (AclBinding by : answer.deniedBy()) {
-                        out.println("    denied by " + Wording.record(by));
+                    for (Access.Reason by : answer.deniedBy()) {
+                        out.println("    denied by " + reason(by.record(), by.through()));
                     }
-                    for (AclBinding by : answer.allowedBy()) {
+                    for (Access.Reason by : answer.allowedBy()) {
                         out.println((answer.allowed() ? "    allowed by " : "    without that, allowed by ")
-                                + Wording.record(by));
+                                + reason(by.record(), by.through()));
                     }
                 }
                 notes(access, out);
@@ -528,18 +687,35 @@ public final class RbacCommand {
         }
         InetAddress host = host(arguments);
         return (records, out, err) -> {
-            try (Access access = new Access(everyRecord(records, err), Identities.SELF, host)) {
+            try (Access access = new Access(everyRecord(records, err), host)) {
                 List<Access.Line> granted = access.granted(principal);
-                List<Access.Line> denied = access.denied(principal);
+                List<Access.Line> denied = new ArrayList<>();
+                List<Access.Line> deniedAsAMember = new ArrayList<>();
+                for (Access.Line line : access.denied(principal)) {
+                    (line.through() == null ? denied : deniedAsAMember).add(line);
+                }
+                boolean group = BindingCodec.GROUP_TYPE.equals(principal.getPrincipalType());
+                String who = group ? "A member of " + principal : principal.toString();
+                if (group) {
+                    List<KafkaPrincipal> members = access.membersOf(principal);
+                    out.println(members.isEmpty() ? principal + " has no members."
+                            : principal + " has the members " + names(members) + ".");
+                } else if (!access.groupsOf(principal).isEmpty()) {
+                    out.println(principal + " is in " + names(access.groupsOf(principal)) + ".");
+                }
                 if (granted.isEmpty()) {
-                    out.println(principal + " may do nothing, by the roles and the ACLs.");
+                    out.println(who + " may do nothing, by the roles and the ACLs.");
                 } else {
-                    out.println(principal + " may:");
+                    out.println(who + " may:");
                     table(rows(granted), "  ", out);
                 }
                 if (!denied.isEmpty()) {
                     out.println(granted.isEmpty() ? "It is denied:" : "but not, whatever allows it:");
                     table(rows(denied), "  ", out);
+                }
+                if (!deniedAsAMember.isEmpty()) {
+                    out.println("and not by a role or a group, only by an ACL that names " + principal + ":");
+                    table(rows(deniedAsAMember), "  ", out);
                 }
                 notes(access, out);
             }
@@ -550,9 +726,22 @@ public final class RbacCommand {
     private static List<String[]> rows(List<Access.Line> lines) {
         List<String[]> rows = new ArrayList<>();
         for (Access.Line line : lines) {
-            rows.add(new String[] {line.on(), line.operations(), "by " + Wording.record(line.by())});
+            rows.add(new String[] {line.on(), line.operations(), "by " + reason(line.by(), line.through())});
         }
         return rows;
+    }
+
+    /** The record behind a line, and the group through which it applies when it names one. */
+    private static String reason(AclBinding record, KafkaPrincipal through) {
+        return Wording.record(record) + (through == null ? "" : ", as a member of " + through);
+    }
+
+    private static String names(List<KafkaPrincipal> principals) {
+        List<String> names = new ArrayList<>();
+        for (KafkaPrincipal principal : principals) {
+            names.add(principal.toString());
+        }
+        return String.join(", ", names);
     }
 
     /** What the answer leaves out, and what it depends on. */
@@ -597,6 +786,23 @@ public final class RbacCommand {
     }
 
     // --- shared ----------------------------------------------------------------
+
+    /** Whether {@code --output} asks for JSON. */
+    private static boolean json(Arguments arguments) throws Arguments.WrongUsage {
+        String output = arguments.value("--output").orElse("text");
+        if (!"text".equals(output) && !"json".equals(output)) {
+            throw new Arguments.WrongUsage("--output is text or json, not " + output);
+        }
+        return "json".equals(output);
+    }
+
+    /** Prints JSON objects as one array, one object on a line. */
+    private static void array(List<String> objects, PrintStream out) {
+        out.println(objects.isEmpty() ? "[]"
+                : "[" + System.lineSeparator() + "  "
+                        + String.join("," + System.lineSeparator() + "  ", objects)
+                        + System.lineSeparator() + "]");
+    }
 
     /**
      * Every ACL record of the cluster, in a fixed order. A record that has
