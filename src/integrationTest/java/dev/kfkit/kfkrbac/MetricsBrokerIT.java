@@ -104,13 +104,16 @@ class MetricsBrokerIT {
 
     private void aliceProducesByHerRoleAndBobIsRefused() {
         clients.createAcls(Clients.binding("DeveloperWrite", ALICE, PREFIX));
-        Await.allowed(IN_FORCE, "she holds DeveloperWrite on " + PREFIX, () -> clients.produce(ALICE, TOPIC));
+        // In force once she may see the topic; a producer started before that would be refused, and recorded so.
+        Await.allowed(IN_FORCE, "she holds DeveloperWrite on " + PREFIX, () -> clients.describe(ALICE, TOPIC));
+        clients.produce(ALICE, TOPIC).assertAllowed("she holds DeveloperWrite on " + PREFIX);
         clients.produce(BOB, TOPIC).assertRefused("no binding and no ACL names him");
     }
 
     /**
      * Scrapes until the series of both are there: hers with the verdict of
-     * her role, his denied, and none of his allowed.
+     * her role, his denied, none of his allowed and no IDEMPOTENT_WRITE of
+     * hers denied.
      */
     private void awaitTheirSeries() {
         Map<String, String> hers = Map.of("principal", "User:" + ALICE, "resource_type", "TOPIC", "resource", TOPIC,
@@ -127,6 +130,12 @@ class MetricsBrokerIT {
         Map<String, String> hisAllowed = Map.of("principal", "User:" + BOB, "resource", TOPIC, "result", "ALLOWED");
         assertEquals(List.of(), series.stream().filter(line -> has(line, hisAllowed)).toList(),
                 "series that say " + BOB + " was allowed something on " + TOPIC);
+        // #47: before InitProducerId the broker asks for IDEMPOTENT_WRITE without logging a denial; her role
+        // answers its next question, and her producer, which works, leaves nothing denied behind.
+        Map<String, String> herDenied = Map.of("principal", "User:" + ALICE, "operation", "IDEMPOTENT_WRITE",
+                "result", "DENIED");
+        assertEquals(List.of(), series.stream().filter(line -> has(line, herDenied)).toList(),
+                "series that say " + ALICE + ", whose producer works by her role, was denied IDEMPOTENT_WRITE");
     }
 
     private static boolean has(String series, Map<String, String> labels) {

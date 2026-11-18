@@ -150,22 +150,36 @@ once it is final:
 | a deny ACL matches it, whatever the roles say | `DENIED` |
 | nothing allows it | `DENIED` |
 
-The verdict recorded is the one the client got. Two things are not counted,
-because they are not verdicts on a resource:
+The verdict recorded is the one the client got. What is not counted is what
+does not refuse a request:
 
+- A denial the broker asks for without logging it. The broker asks some
+  questions only to find out, and logs no denial for them in its own
+  authorizer log: whether to list a topic in a reply that lists all topics,
+  or whether a producer may write idempotently to the whole cluster before
+  it is given a producer ID. Such a denial is not counted; the same
+  question allowed is, as `ALLOWED`. A `DENIED` series is therefore a
+  request, or a part of one, that was refused.
 - The broker's second question, "may this principal do this on any resource
   of the type", which an idempotent producer is asked before it sends
-  anything. Its answer names no resource. The produce requests that follow
-  are counted, topic by topic. The broker asks that question only after
-  `IDEMPOTENT_WRITE` on the cluster was denied, and that denial is a verdict
-  and is counted: a producer that writes by a role, or by an ACL on its
-  topics, has a series `DENIED` `IDEMPOTENT_WRITE` on `kafka-cluster` with
-  the request type `INIT_PRODUCER_ID`, which grows each time it starts.
+  anything. The broker asks it only after `IDEMPOTENT_WRITE` on the cluster
+  was denied, without logging. When a role or an ACL lets the producer write
+  to some topic, the producer is not refused and nothing denied is counted:
+  a healthy producer that writes by a role leaves no `DENIED` series. When
+  nothing does, the producer is refused, and the denial of
+  `IDEMPOTENT_WRITE` on `kafka-cluster` is counted, with the request type
+  `INIT_PRODUCER_ID`, as for `User:alice` above. The second question's own
+  answer names no resource and is not a series; the produce requests that
+  follow are counted, topic by topic.
 - A refusal to create or delete a role binding. The request of a resource
   owner is let through to where that is decided, and is counted as `ALLOWED`
   `ALTER` on the cluster even when what it asks for is then refused; the
   refusal and its reason go back to the caller and to the log of the
   controller.
+
+kfkwho's own authorizer, of the version in the jar, counts every denial,
+those the broker does not log included; with kfkrbac the series of a
+producer that writes by an ordinary ACL change in the same way.
 
 ## Everything else is kfkwho's
 

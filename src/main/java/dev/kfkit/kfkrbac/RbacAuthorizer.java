@@ -17,6 +17,7 @@ package dev.kfkit.kfkrbac;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -112,8 +113,10 @@ import org.slf4j.LoggerFactory;
  *
  * <p>With {@value #METRICS_ENABLED_CONFIG} set, every verdict
  * {@link #authorize} returns is also handed to kfkwho's recorder, which
- * publishes who accessed what as JMX metrics. Without it nothing of kfkwho
- * is created.
+ * publishes who accessed what as JMX metrics, but for a denial the broker
+ * asked not to log: that is held back, and recorded only when the broker's
+ * next question about the same request, by resource type, is denied too.
+ * Without the setting nothing of kfkwho is created.
  *
  * <p>Configure with {@code authorizer.class.name=dev.kfkit.kfkrbac.RbacAuthorizer}.
  */
@@ -133,6 +136,20 @@ public class RbacAuthorizer extends StandardAuthorizer {
      * {@link #authorize} itself, and that answer must be the ACLs' alone.
      */
     private static final ThreadLocal<Boolean> ACLS_ONLY = new ThreadLocal<>();
+
+    /**
+     * The denials of this thread's last call to {@link #authorize} that the
+     * broker asked not to log, while metrics are on: not recorded, unless
+     * the broker's next question, {@link #authorizeByResourceType} about the
+     * same request, is denied too. That is how the broker settles
+     * {@code InitProducerId}: {@code IDEMPOTENT_WRITE} on the cluster, and
+     * when that is denied, {@code WRITE} on any topic.
+     */
+    private static final ThreadLocal<HeldBack> HELD_BACK = new ThreadLocal<>();
+
+    /** Denials held back from the recorder, and the request they were given for. */
+    private record HeldBack(AuthorizableRequestContext requestContext, List<Action> actions) {
+    }
 
     /**
      * What makes the private authorizer allow whatever no deny matches. Its
@@ -311,9 +328,48 @@ public class RbacAuthorizer extends StandardAuthorizer {
         // The parent's own question while it answers authorizeByResourceType is not a verdict.
         AccessRecorder recorder = this.recorder;
         if (recorder != null && ACLS_ONLY.get() == null) {
-            recorder.record(requestContext, actions, verdicts);
+            record(recorder, requestContext, actions, verdicts);
         }
         return verdicts;
+    }
+
+    /**
+     * Records the verdicts but the denials the broker asked not to log: a
+     * probe, such as {@code IDEMPOTENT_WRITE} on the cluster before
+     * {@code InitProducerId} or a topic left out of a listing, is not a
+     * request refused. Those are held back for {@link #authorizeByResourceType}.
+     */
+    private static void record(AccessRecorder recorder, AuthorizableRequestContext requestContext,
+            List<Action> actions, List<AuthorizationResult> verdicts) {
+        List<Action> heldBack = null;
+        for (int i = 0; i < verdicts.size(); i++) {
+            if (verdicts.get(i) == AuthorizationResult.DENIED && !actions.get(i).logIfDenied()) {
+                if (heldBack == null) {
+                    heldBack = new ArrayList<>(1);
+                }
+                heldBack.add(actions.get(i));
+            }
+        }
+        if (heldBack == null) {
+            if (HELD_BACK.get() != null) {
+                HELD_BACK.remove();
+            }
+            recorder.record(requestContext, actions, verdicts);
+            return;
+        }
+        HELD_BACK.set(new HeldBack(requestContext, heldBack));
+        if (heldBack.size() == actions.size()) {
+            return;
+        }
+        List<Action> recorded = new ArrayList<>(actions.size() - heldBack.size());
+        List<AuthorizationResult> theirVerdicts = new ArrayList<>(actions.size() - heldBack.size());
+        for (int i = 0; i < verdicts.size(); i++) {
+            if (verdicts.get(i) == AuthorizationResult.ALLOWED || actions.get(i).logIfDenied()) {
+                recorded.add(actions.get(i));
+                theirVerdicts.add(verdicts.get(i));
+            }
+        }
+        recorder.record(requestContext, recorded, theirVerdicts);
     }
 
     /**
@@ -342,6 +398,24 @@ public class RbacAuthorizer extends StandardAuthorizer {
      */
     @Override
     public AuthorizationResult authorizeByResourceType(AuthorizableRequestContext requestContext, AclOperation op,
+            ResourceType resourceType) {
+        AuthorizationResult answer = answerByResourceType(requestContext, op, resourceType);
+        AccessRecorder recorder = this.recorder;
+        if (recorder != null) {
+            HeldBack heldBack = HELD_BACK.get();
+            if (heldBack != null) {
+                HELD_BACK.remove();
+                // The broker asked this because what it held back was denied; denied again, the request is refused.
+                if (answer == AuthorizationResult.DENIED && heldBack.requestContext() == requestContext) {
+                    recorder.record(requestContext, heldBack.actions(),
+                            Collections.nCopies(heldBack.actions().size(), AuthorizationResult.DENIED));
+                }
+            }
+        }
+        return answer;
+    }
+
+    private AuthorizationResult answerByResourceType(AuthorizableRequestContext requestContext, AclOperation op,
             ResourceType resourceType) {
         AuthorizationResult parent;
         ACLS_ONLY.set(Boolean.TRUE);
