@@ -147,6 +147,11 @@ maintainer's answer.
   and delete, and what is still to be shown on a cluster of several nodes
   (#5).
 - The command: what it does on top of the ACL tool (#6).
+- Schemas and connectors: how Kafka Connect and a schema registry are
+  plugged into, who the caller of a REST request is, and which schema
+  registry comes first (#8).
+- Bringing existing role bindings over: the formats read and how they are
+  documented (#9).
 
 ## Corrections
 
