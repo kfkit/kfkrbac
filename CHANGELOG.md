@@ -14,3 +14,7 @@ major version is 0.
   `authorizeByResourceType`. No roles can be defined yet, so the verdict is
   still the ACLs'.
 - A JMH benchmark of `authorize`: `./gradlew jmh`.
+- The seven roles in code and in [docs/roles.md](docs/roles.md), with what
+  each grants on topics, groups, transactional IDs, the cluster, subjects and
+  connectors. Nothing reads bindings yet, so no role grants anything on a
+  broker.
