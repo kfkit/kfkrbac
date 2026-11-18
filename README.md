@@ -12,8 +12,10 @@ One jar, one line of configuration, free and open source.
 > to alter the cluster, or a `SystemAdmin`, anything; a `ResourceOwner`
 > bindings inside what it owns; everyone else nothing. The command binds,
 > unbinds and lists bindings and answers "who can" and "what can"
-> ([docs/command.md](docs/command.md)). Groups, `apply`, `import` and the
-> extension for connectors do not exist. What
+> ([docs/command.md](docs/command.md)). The extension for Kafka Connect
+> decides connector requests from the same bindings, in unit tests; it has
+> not run in a real worker yet ([docs/connect.md](docs/connect.md)).
+> Groups, `apply` and `import` do not exist. What
 > is described below is the design, not something you can install.
 
 ## Why
@@ -48,8 +50,9 @@ topic, a prefix or the whole cluster.
   command is in [docs/command.md](docs/command.md).
 - Delegation: the owner of a prefix hands out roles inside it, and nowhere
   else.
-- Connectors: the same jar plugs into Kafka Connect and applies the same
-  bindings there.
+- Connectors: the same jar plugs into Kafka Connect with one line,
+  `rest.extension.classes=dev.kfkit.kfkrbac.connect.RbacConnectRestExtension`,
+  and applies the same bindings there: [docs/connect.md](docs/connect.md).
 - Access metrics on request: the per-principal, per-client, per-topic
   metrics of [kfkwho](https://github.com/kfkit/kfkwho), with its exporter
   rules and dashboard unchanged. Off by default.

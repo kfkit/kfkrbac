@@ -74,6 +74,15 @@ record RoleBinding(Role role, KafkaPrincipal member, Target target, String name,
     }
 
     /**
+     * Whether the binding grants the operation on the connector of that name:
+     * a binding for connectors whose pattern covers it, or a cluster role.
+     */
+    boolean grants(ConnectorOperation operation, String connector) {
+        return (target == Target.CLUSTER || target == Target.CONNECTORS && covers(connector))
+                && role.grants(operation);
+    }
+
+    /**
      * The resources of a broker type on which the binding grants the
      * operation, as a pattern an ACL could have, or {@code null} when it
      * grants the operation on none.

@@ -17,9 +17,12 @@ package dev.kfkit.kfkrbac;
 
 /**
  * What can be done to a connector of Kafka Connect. The broker never sees
- * these requests; the Connect extension asks them of the roles.
+ * these requests; the Connect extension asks them of the roles through
+ * {@link RestAccess}.
+ *
+ * <p>Public only for the extensions in this jar; it is not an API to build on.
  */
-enum ConnectorOperation {
+public enum ConnectorOperation {
     CREATE,
     DELETE,
     READ_CONFIG,

@@ -45,6 +45,19 @@ major version is 0.
   binding or ACL behind each line. Exit status 0 done, 1 refused or failed,
   2 wrong usage. See [docs/command.md](docs/command.md). The `group` verbs,
   `apply` and `import` do not exist yet.
+- The extension for Kafka Connect,
+  `rest.extension.classes=dev.kfkit.kfkrbac.connect.RbacConnectRestExtension`:
+  it reads the bindings with the worker's own connection settings, every
+  `kfkrbac.refresh.interval.ms`, and allows a request to the worker's REST
+  interface when a role bound to the caller grants its operation on the
+  connector; a refusal is a 403 that says what was missing, `GET
+  /connectors` lists only what the caller may see, an anonymous request gets
+  401, and before the first read everything but `GET /health` gets 503. The
+  caller is the basic-authentication user or the certificate's subject;
+  `kfkrbac.super.users` pass. The gauges `bindings-age-ms` and `bindings`
+  are in the MBean `kfkrbac:type=rest-bindings`. See
+  [docs/connect.md](docs/connect.md). Members of groups are not honoured
+  yet.
 - A release workflow: a `vX.Y.Z` tag runs the whole check and publishes a
   GitHub Release with the jar, its SHA-256, a keyless cosign signature and a
   build provenance attestation. How to verify a released jar is in
