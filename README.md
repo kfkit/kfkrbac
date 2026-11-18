@@ -117,6 +117,20 @@ kafka-run-class.sh dev.kfkit.kfkrbac.RbacCommand bind --bootstrap-server localho
 start with `billing.`. No client is ever a principal of type `DeveloperRead`,
 so to a broker without kfkrbac the record means nothing.
 
+## Documentation
+
+- [Installation](docs/install.md): the jar and the line, what changes on
+  the cluster, the `apache/kafka` image, Strimzi, removing it.
+- [Roles](docs/roles.md): what each of the seven roles grants.
+- [Bindings](docs/bindings.md): what a binding is, with the ACL tool and
+  with the command; narrowing; cluster roles; records that are not bindings.
+- [Delegation](docs/delegation.md): who may bind what, with a worked
+  example.
+- [Groups](docs/groups.md): membership records, roles and ACLs for a group.
+- [The command](docs/command.md): every verb and option.
+- [Kafka Connect](docs/connect.md): the extension for the workers.
+- [Provenance](docs/provenance/README.md): verifying a released jar.
+
 ## Compatibility
 
 Compiled against Kafka 4.4, Java 17. Kafka 4.1 and later is the target
@@ -129,6 +143,7 @@ of 4.1.2, 4.2.2, 4.3.1 and 4.4.0.
 ./gradlew check
 ./gradlew integrationTest                      # the jar on real brokers; needs Docker
 ./gradlew integrationTest -PbrokerVersion=4.1.2
+./gradlew integrationTest --tests '*DocsIT'    # the commands of docs/ against a broker
 ./gradlew jmh      # the cost of authorize(), in build/results/jmh/
 ./gradlew publishToMavenLocal -Pversion=0.0.0-test   # jar, sources, javadoc, POM
 ```
