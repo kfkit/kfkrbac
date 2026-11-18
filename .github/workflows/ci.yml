@@ -26,15 +26,16 @@ jobs:
           name: test-reports
           path: build/reports/tests/
 
-  # The built jar as the authorizer of a real broker, one job per supported
-  # release: the three the project supports and the one the jar is compiled
-  # against (kafkaVersion in build.gradle.kts). The job names are what the
+  # The built jar as the authorizer of a real broker, and as the extension of
+  # two Connect workers that use it, one job per supported release: the
+  # three the project supports and the one the jar is compiled against
+  # (kafkaVersion in build.gradle.kts). The job names are what the
   # ruleset requires; keep them stable.
   integration:
     name: integration (${{ matrix.kafka }})
     needs: check
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -46,7 +47,7 @@ jobs:
           distribution: temurin
           java-version: 17
       - uses: gradle/actions/setup-gradle@v6
-      - run: ./gradlew integrationTest --tests '*BrokerIT' -PbrokerVersion=${{ matrix.kafka }} --no-daemon
+      - run: ./gradlew integrationTest --tests '*BrokerIT' --tests '*ConnectIT' -PbrokerVersion=${{ matrix.kafka }} --no-daemon
       - if: failure()
         uses: actions/upload-artifact@v7
         with:

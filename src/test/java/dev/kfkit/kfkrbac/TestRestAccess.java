@@ -21,9 +21,14 @@ import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 
+import org.apache.kafka.common.acl.AccessControlEntry;
 import org.apache.kafka.common.acl.AclBinding;
+import org.apache.kafka.common.acl.AclOperation;
+import org.apache.kafka.common.acl.AclPermissionType;
 import org.apache.kafka.common.metrics.Metrics;
 import org.apache.kafka.common.resource.PatternType;
+import org.apache.kafka.common.resource.ResourcePattern;
+import org.apache.kafka.common.resource.ResourceType;
 import org.apache.kafka.common.utils.MockTime;
 
 /**
@@ -54,7 +59,7 @@ public final class TestRestAccess implements AutoCloseable {
 
     private TestRestAccess(String superUsers, AclBinding... records) {
         this.records = new FakeAclRecords(records);
-        this.access = new RestAccess(this.records, RestAccess.superUsers(superUsers), Identities.SELF, time,
+        this.access = new RestAccess(this.records, RestAccess.superUsers(superUsers), time,
                 new Metrics(time));
     }
 
@@ -77,6 +82,11 @@ public final class TestRestAccess implements AutoCloseable {
         records.records.add(record);
     }
 
+    /** Deletes a record from the "cluster"; out of force after the next read. */
+    public void remove(AclBinding record) {
+        records.records.remove(record);
+    }
+
     /** Every read fails from now on, as it does when the cluster cannot be reached. */
     public void failReads() {
         records.refusal = new AclRecords.Failure("TimeoutException: the cluster did not answer", null);
@@ -94,6 +104,13 @@ public final class TestRestAccess implements AutoCloseable {
     /** The binding of a cluster role. */
     public static AclBinding onTheCluster(String role, String member) {
         return BindingRecords.record(role, member, RoleBinding.Target.CLUSTER, null, PatternType.LITERAL);
+    }
+
+    /** The record that puts the member in the group: {@code Member:User:alice} on {@code Group:payments}. */
+    public static AclBinding membership(String member, String group) {
+        return new AclBinding(new ResourcePattern(ResourceType.TOPIC, group, PatternType.LITERAL),
+                new AccessControlEntry(BindingCodec.MEMBER_TYPE + ":" + member, "*", AclOperation.ALL,
+                        AclPermissionType.ALLOW));
     }
 
     /** The certificate of {@code CN=alice,O=example}. */

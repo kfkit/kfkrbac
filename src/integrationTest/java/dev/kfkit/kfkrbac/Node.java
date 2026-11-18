@@ -291,6 +291,18 @@ final class Node implements AutoCloseable {
         return DockerClientFactory.instance().dockerHostIpAddress() + ":" + port;
     }
 
+    /**
+     * The address a container on the same network reaches this broker at,
+     * on the brokers' own listener: SASL_PLAINTEXT, mechanism PLAIN, as
+     * {@code admin}.
+     */
+    String internalBootstrap() {
+        if (port == 0) {
+            throw new IllegalStateException("node " + id + " is not a broker");
+        }
+        return alias(id) + ":" + INTERNAL_PORT;
+    }
+
     /** What the node has logged since it was created, restarts included. */
     String log() {
         return container.getLogs();

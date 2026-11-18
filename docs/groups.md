@@ -8,7 +8,10 @@ no directory to connect and nothing else to run.
 
 > Status: the authorizer reads membership records and decides with them in
 > unit tests against the real `StandardAuthorizer`; groups have not run on a
-> broker yet. The command that makes the examples shorter does not exist.
+> broker yet. The extension for Kafka Connect reads the same records and
+> applies a role bound to a group to its members, in real workers too
+> ([connect.md](connect.md)). The command that makes the examples shorter
+> does not exist.
 
 ## Putting a user in a group
 

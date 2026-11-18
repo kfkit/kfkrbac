@@ -81,6 +81,18 @@ final class Clients {
                 new AccessControlEntry(role + ":User:" + user, "*", AclOperation.ALL, AclPermissionType.ALLOW));
     }
 
+    /** A role binding on connectors: {@code DeveloperManage:User:alice} on the prefix {@code Connector:billing-}. */
+    static AclBinding connectorBinding(String role, String member, String prefix) {
+        return new AclBinding(new ResourcePattern(ResourceType.TOPIC, "Connector:" + prefix, PatternType.PREFIXED),
+                new AccessControlEntry(role + ":" + member, "*", AclOperation.ALL, AclPermissionType.ALLOW));
+    }
+
+    /** The record that puts the user in the group: {@code Member:User:bob} on {@code Group:payments}. */
+    static AclBinding membership(String user, String group) {
+        return new AclBinding(new ResourcePattern(ResourceType.TOPIC, "Group:" + group, PatternType.LITERAL),
+                new AccessControlEntry("Member:User:" + user, "*", AclOperation.ALL, AclPermissionType.ALLOW));
+    }
+
     /** An ACL that denies the user everything on the topic of that name. */
     static AclBinding deny(String user, String topic) {
         return new AclBinding(new ResourcePattern(ResourceType.TOPIC, topic, PatternType.LITERAL),

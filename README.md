@@ -13,11 +13,13 @@ One jar, one line of configuration, free and open source.
 > bindings inside what it owns; everyone else nothing. The command binds,
 > unbinds and lists bindings and answers "who can" and "what can"
 > ([docs/command.md](docs/command.md)). The extension for Kafka Connect
-> decides connector requests from the same bindings, in unit tests; it has
-> not run in a real worker yet ([docs/connect.md](docs/connect.md)).
-> Groups are read from membership records and honoured by the authorizer
-> ([docs/groups.md](docs/groups.md)); the command and the extension for
-> Kafka Connect do not know them yet. The `group` verbs, `apply` and
+> decides connector requests from the same bindings, in unit tests and in
+> real workers of Kafka 4.1 to 4.4 with basic authentication in the
+> integration tests ([docs/connect.md](docs/connect.md)); with mutual TLS
+> it has not run in a real worker yet. Groups are read from membership
+> records and honoured by the authorizer and by the extension for Kafka
+> Connect ([docs/groups.md](docs/groups.md)); the command does not know
+> them yet. The `group` verbs, `apply` and
 > `import` do not exist. What
 > is described below is the design, not something you can install.
 

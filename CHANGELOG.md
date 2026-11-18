@@ -35,7 +35,9 @@ major version is 0.
 - An integration-test suite that runs the built jar as the authorizer of
   real brokers in containers, on Kafka 4.1.2, 4.2.2, 4.3.1 and 4.4.0 and on a
   cluster of a controller and several brokers: `./gradlew integrationTest`,
-  `-PbrokerVersion=4.1.2` for another release. It needs Docker and is skipped
+  `-PbrokerVersion=4.1.2` for another release. `ConnectIT` runs two Connect
+  workers with the jar as their extension against a broker with the jar, on
+  each of those releases. It needs Docker and is skipped
   without it; `./gradlew check -PintegrationTest` makes it part of `check`.
 - The command: `kafka-run-class.sh dev.kfkit.kfkrbac.RbacCommand` with the
   verbs `bind`, `unbind`, `list` (`--output json`), `who-can` and
@@ -55,8 +57,8 @@ major version is 0.
   caller is the basic-authentication user or the certificate's subject;
   `kfkrbac.super.users` pass. The gauges `bindings-age-ms` and `bindings`
   are in the MBean `kfkrbac:type=rest-bindings`. See
-  [docs/connect.md](docs/connect.md). Members of groups are not honoured
-  yet.
+  [docs/connect.md](docs/connect.md). A role bound to a group applies to
+  the group's members, read from the membership records with the bindings.
 - Groups. A membership record, an ACL whose principal is `Member:<member>`
   on the literal topic name `Group:<name>`, puts a principal in a group. A
   role bound to a group (`DeveloperRead:Group:payments`) is held by its

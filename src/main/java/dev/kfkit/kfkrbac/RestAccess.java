@@ -54,7 +54,9 @@ import org.slf4j.LoggerFactory;
  * {@code kfkrbac.refresh.interval.ms}. Until the first read succeeds
  * nothing is {@link #ready()}; when a later read fails, the last bindings
  * stay in force and their age, the gauge {@code bindings-age-ms} in the
- * MBean {@code kfkrbac:type=rest-bindings}, grows.
+ * MBean {@code kfkrbac:type=rest-bindings}, grows. A role bound to a group
+ * applies to the group's members, by the membership records of the same
+ * read.
  *
  * <p>Nothing here depends on Kafka Connect: an extension for another REST
  * service asks the same questions. Public only for the extensions in this
@@ -83,7 +85,6 @@ public final class RestAccess implements AutoCloseable {
 
     private final AclRecords records;
     private final Set<KafkaPrincipal> superUsers;
-    private final Identities identities;
     private final Time time;
     private final Metrics metrics;
     private final long started;
@@ -93,11 +94,9 @@ public final class RestAccess implements AutoCloseable {
     private volatile BindingSnapshot bindings;
     private volatile long readAt = -1;
 
-    RestAccess(AclRecords records, Set<KafkaPrincipal> superUsers, Identities identities, Time time,
-            Metrics metrics) {
+    RestAccess(AclRecords records, Set<KafkaPrincipal> superUsers, Time time, Metrics metrics) {
         this.records = Objects.requireNonNull(records, "records");
         this.superUsers = Set.copyOf(superUsers);
-        this.identities = Objects.requireNonNull(identities, "identities");
         this.time = Objects.requireNonNull(time, "time");
         this.metrics = Objects.requireNonNull(metrics, "metrics");
         this.started = time.milliseconds();
@@ -142,8 +141,7 @@ public final class RestAccess implements AutoCloseable {
             metrics.close();
             throw e;
         }
-        RestAccess access = new RestAccess(new AdminAclRecords(admin), superUsers, Identities.SELF, Time.SYSTEM,
-                metrics);
+        RestAccess access = new RestAccess(new AdminAclRecords(admin), superUsers, Time.SYSTEM, metrics);
         access.refreshEvery(interval, name);
         return access;
     }
@@ -167,7 +165,7 @@ public final class RestAccess implements AutoCloseable {
      */
     boolean refresh() {
         try {
-            BindingSnapshot read = BindingSnapshot.of(records.describe(AclBindingFilter.ANY), identities);
+            BindingSnapshot read = BindingSnapshot.of(records.describe(AclBindingFilter.ANY));
             boolean first = bindings == null;
             bindings = read;
             readAt = time.milliseconds();
@@ -219,8 +217,9 @@ public final class RestAccess implements AutoCloseable {
     }
 
     /**
-     * Whether a role bound to the principal grants the operation on the
-     * connector. No, while the bindings have not been read.
+     * Whether a role bound to the principal, or to a group it is a member
+     * of, grants the operation on the connector. No, while the bindings have
+     * not been read.
      */
     public boolean grants(KafkaPrincipal principal, ConnectorOperation operation, String connector) {
         BindingSnapshot held = bindings;
