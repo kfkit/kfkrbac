@@ -15,6 +15,7 @@
  */
 package dev.kfkit.kfkrbac;
 
+import static dev.kfkit.kfkrbac.TestRestAccess.membership;
 import static dev.kfkit.kfkrbac.TestRestAccess.onConnectors;
 import static dev.kfkit.kfkrbac.TestRestAccess.onTheCluster;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -105,6 +106,51 @@ class RestAccessTest {
         }
     }
 
+    /** AC5: a role bound to a group applies to its members, by the membership records of the same read. */
+    @Test
+    void aRoleBoundToAGroupAppliesToItsMembers() {
+        AclBinding aliceInPayments = membership("User:alice", "Group:payments");
+        try (TestRestAccess test = TestRestAccess.of("",
+                onConnectors("DeveloperManage", "Group:payments", "billing-"), aliceInPayments)) {
+            test.refresh();
+            assertTrue(test.access().grants(ALICE, ConnectorOperation.CREATE, "billing-sink"),
+                    "she is a member of Group:payments, which holds DeveloperManage on Connector:billing-");
+            assertFalse(test.access().grants(ALICE, ConnectorOperation.CREATE, "payments-sink"));
+            assertFalse(test.access().grants(new KafkaPrincipal("User", "bob"), ConnectorOperation.CREATE,
+                    "billing-sink"), "he is in no group");
+
+            test.remove(aliceInPayments);
+            test.refresh();
+            assertFalse(test.access().grants(ALICE, ConnectorOperation.CREATE, "billing-sink"),
+                    "she left the group at the next read");
+        }
+    }
+
+    /** AC5, the twin: a group that holds nothing gives its members nothing, and a membership alone grants nothing. */
+    @Test
+    void aMembershipAloneGrantsNothing() {
+        try (TestRestAccess test = TestRestAccess.of("", membership("User:alice", "Group:payments"),
+                onConnectors("DeveloperManage", "Group:billing", "billing-"))) {
+            test.refresh();
+            assertFalse(test.access().grants(ALICE, ConnectorOperation.CREATE, "billing-sink"),
+                    "the binding is Group:billing's, and she is in Group:payments");
+            assertEquals(1.0, (Double) test.access().metrics().metrics().entrySet().stream()
+                    .filter(entry -> entry.getKey().name().equals("bindings")).findFirst().orElseThrow()
+                    .getValue().metricValue(), "a membership is not a binding");
+        }
+    }
+
+    /** AC5: a cluster role held through a group runs the service. */
+    @Test
+    void aClusterRoleHeldThroughAGroupRunsTheService() {
+        try (TestRestAccess test = TestRestAccess.of("", onTheCluster("ClusterAdmin", "Group:ops"),
+                membership("User:alice", "Group:ops"))) {
+            test.refresh();
+            assertTrue(test.access().administers(ALICE));
+            assertFalse(test.access().administers(new KafkaPrincipal("User", "bob")));
+        }
+    }
+
     @Test
     void aSuperUserIsNamedInTheSettings() {
         try (TestRestAccess test = TestRestAccess.of(" User:connect ; User:admin;")) {
@@ -132,7 +178,7 @@ class RestAccessTest {
         MockTime time = new MockTime();
         FakeAclRecords records = new FakeAclRecords(onConnectors("DeveloperManage", "User:alice", "billing-"));
         Metrics metrics = new Metrics(time);
-        try (RestAccess access = new RestAccess(records, Set.of(), Identities.SELF, time, metrics)) {
+        try (RestAccess access = new RestAccess(records, Set.of(), time, metrics)) {
             time.sleep(300);
             assertEquals(300, access.ageMs(), "since the start while nothing has been read");
             assertTrue(access.refresh());
@@ -179,7 +225,7 @@ class RestAccessTest {
             public void close() {
             }
         };
-        try (RestAccess access = new RestAccess(records, Set.of(), Identities.SELF, Time.SYSTEM,
+        try (RestAccess access = new RestAccess(records, Set.of(), Time.SYSTEM,
                 new Metrics())) {
             access.refreshEvery(100, "test");
             awaitReady(access);

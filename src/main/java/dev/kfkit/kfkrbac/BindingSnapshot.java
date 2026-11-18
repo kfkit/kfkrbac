@@ -20,8 +20,8 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 
+import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.acl.AclBinding;
 import org.apache.kafka.common.security.auth.KafkaPrincipal;
 
@@ -30,8 +30,11 @@ import org.apache.kafka.common.security.auth.KafkaPrincipal;
  * by member, at one moment: what an extension outside the broker decides
  * with. Immutable; a newer listing is a new snapshot.
  *
- * <p>A record that looks like a binding and is not one grants nothing, here
- * as on the broker. Nothing here depends on Kafka Connect.
+ * <p>A principal holds the bindings that name it and those that name a
+ * group it is a member of: the membership records of the same listing are
+ * read by {@link Memberships}, the code the broker reads them with. A
+ * record that looks like a binding or a membership and is not one grants
+ * nothing, here as on the broker. Nothing here depends on Kafka Connect.
  */
 final class BindingSnapshot {
 
@@ -48,10 +51,13 @@ final class BindingSnapshot {
         this.malformed = malformed;
     }
 
-    /** The bindings among the records; ordinary ACLs and memberships are left out. */
-    static BindingSnapshot of(Collection<AclBinding> records, Identities identities) {
-        Objects.requireNonNull(identities, "identities");
+    /**
+     * The bindings among the records, each applying to its member and to the
+     * members of the group it names; ordinary ACLs are left out.
+     */
+    static BindingSnapshot of(Collection<AclBinding> records) {
         Map<KafkaPrincipal, List<RoleBinding>> held = new HashMap<>();
+        Map<Uuid, BindingCodec.Membership> memberships = new HashMap<>();
         int bindings = 0;
         int malformed = 0;
         for (AclBinding record : records) {
@@ -59,13 +65,18 @@ final class BindingSnapshot {
             if (decoded instanceof RoleBinding binding) {
                 held.computeIfAbsent(binding.member(), member -> new ArrayList<>()).add(binding);
                 bindings++;
+            } else if (decoded instanceof BindingCodec.Membership membership) {
+                // A listing carries no record IDs; one of its own keeps each membership apart.
+                memberships.put(new Uuid(memberships.size() + 1L, 0L), membership);
             } else if (decoded instanceof BindingCodec.Malformed) {
                 malformed++;
             }
         }
         Map<KafkaPrincipal, RoleBinding[]> byMember = new HashMap<>();
         held.forEach((member, list) -> byMember.put(member, list.toArray(new RoleBinding[0])));
-        return new BindingSnapshot(Map.copyOf(byMember), identities, bindings, malformed);
+        Memberships groups = new Memberships();
+        groups.load(memberships);
+        return new BindingSnapshot(Map.copyOf(byMember), groups, bindings, malformed);
     }
 
     /** Whether a role bound to the principal grants the operation on the connector. */

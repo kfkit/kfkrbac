@@ -15,6 +15,7 @@
  */
 package dev.kfkit.kfkrbac.connect;
 
+import static dev.kfkit.kfkrbac.TestRestAccess.membership;
 import static dev.kfkit.kfkrbac.TestRestAccess.onConnectors;
 import static dev.kfkit.kfkrbac.TestRestAccess.onTheCluster;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -118,6 +119,21 @@ class ConnectorFilterTest {
             filter(exists, request, onConnectors(role, "User:alice", "billing-"));
             assertEquals(403, request.status(), role + " does not grant " + operation);
         }
+    }
+
+    /** AC5: a role held through a group lets its member create; the same request without the membership is refused. */
+    @Test
+    void aRoleHeldThroughAGroupPasses() throws IOException {
+        AclBinding groupBinding = onConnectors("DeveloperManage", "Group:payments", "billing-");
+        FakeRequest member = FakeRequest.of("POST", "/connectors").as("alice").withBody(CREATE_BILLING);
+        filter(false, member, groupBinding, membership("User:alice", "Group:payments"));
+        assertEquals(0, member.status(), member.message());
+
+        FakeRequest outsider = FakeRequest.of("POST", "/connectors").as("alice").withBody(CREATE_BILLING);
+        filter(false, outsider, groupBinding, membership("User:bob", "Group:payments"));
+        assertEquals(403, outsider.status());
+        assertTrue(outsider.message().contains("User:alice may not Create connector billing-sink"),
+                outsider.message());
     }
 
     @Test
