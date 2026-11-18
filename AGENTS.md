@@ -206,8 +206,13 @@ defect, not a trade-off. The map:
 - **The first release is everything above.** The broker's authorizer,
   groups, the command with `apply` and `import`, the extension for Kafka
   Connect, and kfkwho's metrics. It is a GitHub Release
-  with a signed jar; Maven Central follows when the namespace and the
-  credentials exist.
+  with a signed jar.
+- **Maven Central gets the release's jar.** From 0.1.1 the maintainer
+  uploads, through the Central Portal, the jar of the GitHub release, byte
+  for byte, with the POM, sources and javadoc built from the tag, each
+  signed with the OpenPGP key `A4B825D253DB40AB` (on keyserver.ubuntu.com).
+  Gradle's module metadata is not published: it would describe a jar built
+  elsewhere.
 - **Existing role bindings must be easy to bring over.** That matters more
   than looking the same as anything else: where a familiar name or shape
   costs nothing it is kept, and where it would bring a known trouble with it

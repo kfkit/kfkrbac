@@ -7,6 +7,15 @@ major version is 0.
 
 ## Unreleased
 
+## 0.1.1 - 2026-11-18
+
+### Added
+
+- The jar is on Maven Central as `dev.kfkit:kfkrbac`: the same file as on
+  the releases page, with its POM, sources and javadoc, each signed with
+  the OpenPGP key `A4B825D253DB40AB`. See
+  [Provenance](docs/provenance/README.md#from-maven-central).
+
 ### Fixed
 
 - With `kfkrbac.metrics.enabled=true`, a denial the broker asks for without

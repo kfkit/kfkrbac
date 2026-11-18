@@ -53,6 +53,26 @@ The jar's manifest names its version:
 unzip -p "kfkrbac-$X.jar" META-INF/MANIFEST.MF | grep Implementation-Version
 ```
 
+## From Maven Central
+
+From 0.1.1 the jar of each release is also on Maven Central as
+`dev.kfkit:kfkrbac`, the same file byte for byte: the SHA-256 of the
+release checks it, and so do the signature and the attestation above.
+Every file there, the POM, sources and javadoc included, is also signed
+with the OpenPGP key `A4B825D253DB40AB`, "kfkit releases", which is on
+keyserver.ubuntu.com:
+
+<!-- not run: it needs Maven Central and a keyserver over the network -->
+```bash
+X=X.Y.Z
+base="https://repo1.maven.org/maven2/dev/kfkit/kfkrbac/$X"
+curl -fsSLO "$base/kfkrbac-$X.jar" -O "$base/kfkrbac-$X.jar.asc"
+gpg --keyserver keyserver.ubuntu.com --recv-keys A4B825D253DB40AB
+gpg --verify "kfkrbac-$X.jar.asc" "kfkrbac-$X.jar"
+```
+
+`gpg` prints `Good signature from "kfkit releases"`.
+
 ## Release hashes
 
 `release-hashes.txt` lists the signed tags of the first and the current

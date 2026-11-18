@@ -22,7 +22,8 @@ Connect take the same jar with a line of their own, which is in
 - **The jar.** `kfkrbac-<version>.jar` from the
   [releases page](https://github.com/kfkit/kfkrbac/releases), with its
   SHA-256 and its signature; [Provenance](provenance/README.md) has the
-  commands that verify them: run them before the jar goes on a node. It
+  commands that verify them: run them before the jar goes on a node. The
+  same jar is on Maven Central as `dev.kfkit:kfkrbac:<version>`. It
   needs nothing next to it: every class it uses besides its own is in the
   Kafka distribution. `./gradlew jar` builds the same jar from the sources,
   as `build/libs/kfkrbac-<version>.jar`.
