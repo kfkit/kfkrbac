@@ -26,7 +26,6 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -58,10 +57,17 @@ import org.apache.kafka.server.authorizer.AuthorizationResult;
  * gives them to its own. The reason behind an answer is found by asking
  * about one record at a time: a binding is asked through
  * {@link RoleBinding}, as {@link BindingIndex} asks it, for the members
- * {@link Identities} gives; an ordinary ACL is asked of a
+ * {@link Memberships} gives; an ordinary ACL is asked of a
  * {@link StandardAuthorizer} that holds that ACL alone; a deny ACL is asked
  * of one that holds it and an ACL allowing everyone, so that it denies
  * exactly when the deny matches.
+ *
+ * <p>A principal is also the groups the membership records put it in, and
+ * which those are is {@link Memberships}' answer, fed the membership records
+ * as a broker's is. An ACL whose principal is a group is asked of a
+ * {@link GroupAcls} that holds that ACL alone, the class a broker honours
+ * such ACLs with. A group is never among the principals named: no client is
+ * one, and what a group is given, its members are.
  *
  * <p>The answer is the one for an ordinary request. The requests that
  * create, delete and list ACLs and the one that replaces a user's
@@ -72,6 +78,16 @@ import org.apache.kafka.server.authorizer.AuthorizationResult;
 final class Access implements AutoCloseable {
 
     /**
+     * A record that is behind an answer, and how it comes to apply to the principal.
+     *
+     * @param record the binding or the ACL
+     * @param through the group the record names and the principal is a member of, or {@code null} when the
+     *        record names the principal itself, or everyone
+     */
+    record Reason(AclBinding record, KafkaPrincipal through) {
+    }
+
+    /**
      * One principal's answer to "who can".
      *
      * @param principal who
@@ -79,7 +95,7 @@ final class Access implements AutoCloseable {
      * @param allowedBy the bindings and ACLs that allow it, each on its own
      * @param deniedBy the deny ACLs that take it away
      */
-    record Answer(KafkaPrincipal principal, boolean allowed, List<AclBinding> allowedBy, List<AclBinding> deniedBy) {
+    record Answer(KafkaPrincipal principal, boolean allowed, List<Reason> allowedBy, List<Reason> deniedBy) {
     }
 
     /**
@@ -88,8 +104,10 @@ final class Access implements AutoCloseable {
      * @param on the resources, in words
      * @param operations the operations, in words
      * @param by the record behind the line
+     * @param through the group the record names and the principal is a member of, or {@code null} when the
+     *        record names the principal itself, or everyone
      */
-    record Line(String on, String operations, AclBinding by) {
+    record Line(String on, String operations, AclBinding by, KafkaPrincipal through) {
     }
 
     private record Bound(AclBinding record, RoleBinding binding) {
@@ -140,15 +158,30 @@ final class Access implements AutoCloseable {
 
     private static final Comparator<KafkaPrincipal> BY_NAME = Comparator.comparing(KafkaPrincipal::toString);
 
-    private final Identities identities;
+    /** Which groups a principal is in: the membership records, read as a broker reads them. */
+    private final Memberships memberships = new Memberships();
+
     private final InetAddress host;
     private final List<Bound> bindings = new ArrayList<>();
     private final List<AclBinding> allows = new ArrayList<>();
     private final List<AclBinding> denies = new ArrayList<>();
+
+    /** The {@code ALLOW} ACLs whose principal is a group. */
+    private final List<AclBinding> groupAllows = new ArrayList<>();
+
+    /** The {@code DENY} ACLs whose principal is a group: nobody may create one, and one may be there anyway. */
+    private final List<AclBinding> groupDenies = new ArrayList<>();
+
     private final Set<String> hosts = new HashSet<>();
 
-    /** Every principal a binding or an ACL names, {@code User:*} among them when an ACL does. */
+    /**
+     * Every principal a binding, a membership or an ACL names, {@code User:*}
+     * among them when an ACL does, and no group.
+     */
     private final Set<KafkaPrincipal> named = new TreeSet<>(BY_NAME);
+
+    /** The members of each group, for the membership records there are. */
+    private final Map<KafkaPrincipal, Set<KafkaPrincipal>> members = new HashMap<>();
 
     /**
      * A user no record names, asked about in place of {@code User:*}: what
@@ -166,31 +199,42 @@ final class Access implements AutoCloseable {
     /** Holds one ACL at a time: says whether that ACL matches. */
     private final StandardAuthorizer alone = new StandardAuthorizer();
 
+    /** Holds one ACL of a group at a time: says whether it applies to a principal, as a member of that group. */
+    private final GroupAcls aloneOfAGroup = new GroupAcls(memberships);
+
     /**
      * @param records every ACL record of the cluster
-     * @param identities the members a binding may name for it to apply to a principal
      * @param host where the request is asked from, or {@code null} for an address no ACL names
      */
-    Access(Collection<AclBinding> records, Identities identities, InetAddress host) {
-        this.identities = Objects.requireNonNull(identities, "identities");
+    Access(Collection<AclBinding> records, InetAddress host) {
         List<AclBinding> ordered = new ArrayList<>(records);
         ordered.sort(BindingRecords.ORDER);
+        Map<Uuid, BindingCodec.Membership> memberOf = new HashMap<>();
         for (AclBinding record : ordered) {
             BindingCodec.Decoded decoded = BindingCodec.decode(record);
+            boolean deny = record.entry().permissionType() == AclPermissionType.DENY;
             if (decoded instanceof RoleBinding binding) {
                 bindings.add(new Bound(record, binding));
-                named.add(binding.member());
-            } else if (decoded instanceof BindingCodec.Ordinary) {
-                (record.entry().permissionType() == AclPermissionType.DENY ? denies : allows).add(record);
+                name(binding.member());
+            } else if (decoded instanceof BindingCodec.Membership membership) {
+                memberOf.put(Uuid.randomUuid(), membership);
+                name(membership.member());
+                members.computeIfAbsent(membership.group(), group -> new TreeSet<>(BY_NAME)).add(membership.member());
+            } else if (GroupAcls.ofAGroup(StandardAcl.fromAclBinding(record))) {
+                // What a broker hands to its GroupAcls: an ordinary ALLOW, or a DENY nobody may create.
+                (deny ? groupDenies : groupAllows).add(record);
                 if (!"*".equals(record.entry().host())) {
                     hosts.add(record.entry().host());
                 }
-                KafkaPrincipal principal = Wording.principal(record.entry().principal());
-                if (principal != null) {
-                    named.add(principal);
+            } else if (decoded instanceof BindingCodec.Ordinary) {
+                (deny ? denies : allows).add(record);
+                if (!"*".equals(record.entry().host())) {
+                    hosts.add(record.entry().host());
                 }
+                name(Wording.principal(record.entry().principal()));
             }
         }
+        memberships.load(memberOf);
         this.host = host == null ? anAddressNoAclNames(hosts) : host;
         KafkaPrincipal unnamed = new KafkaPrincipal(KafkaPrincipal.USER_TYPE, "anyone");
         while (named.contains(unnamed)) {
@@ -213,23 +257,41 @@ final class Access implements AutoCloseable {
     }
 
     /**
+     * The groups the membership records put the principal in, by name, each
+     * once.
+     */
+    List<KafkaPrincipal> groupsOf(KafkaPrincipal principal) {
+        Set<KafkaPrincipal> groups = new TreeSet<>(BY_NAME);
+        groups.addAll(memberships.of(principal));
+        groups.remove(principal);
+        return List.copyOf(groups);
+    }
+
+    /** The members the membership records put in the group, by name. */
+    List<KafkaPrincipal> membersOf(KafkaPrincipal group) {
+        return List.copyOf(members.getOrDefault(group, Set.of()));
+    }
+
+    /**
      * Who may do the operation on the resource: every principal a record
      * names that the authorizer allows, and every one it would allow were it
-     * not for a deny ACL. {@code User:*} is everyone, as in an ACL: its
-     * answer is the one of a user no record names, and a principal with
-     * that answer, for the same reasons, is left out.
+     * not for a deny ACL. A member of a group is named for what the group is
+     * given, and the group is not. {@code User:*} is everyone, as in an
+     * ACL: its answer is the one of a user no record names, and a principal
+     * with that answer, for the same reasons, is left out.
      *
      * @param resource a resource by its literal name, as a broker asks about it
      */
     List<Answer> whoCan(AclOperation operation, ResourcePattern resource) {
         Action action = action(operation, resource);
-        Map<KafkaPrincipal, List<AclBinding>> allowedBy = new HashMap<>();
-        Map<KafkaPrincipal, List<AclBinding>> deniedBy = new HashMap<>();
+        Map<KafkaPrincipal, List<Reason>> allowedBy = new HashMap<>();
+        Map<KafkaPrincipal, List<Reason>> deniedBy = new HashMap<>();
         for (Bound bound : bindings) {
             if (bound.binding().grants(operation, resource.resourceType(), resource.name())) {
                 for (KafkaPrincipal principal : named) {
                     if (holds(asked(principal), bound.binding())) {
-                        allowedBy.computeIfAbsent(principal, allowed -> new ArrayList<>()).add(bound.record());
+                        allowedBy.computeIfAbsent(principal, allowed -> new ArrayList<>())
+                                .add(new Reason(bound.record(), through(asked(principal), bound.binding())));
                     }
                 }
             }
@@ -238,7 +300,16 @@ final class Access implements AutoCloseable {
             load(alone, List.of(acl));
             for (KafkaPrincipal principal : named) {
                 if (allowed(alone, asked(principal), action)) {
-                    allowedBy.computeIfAbsent(principal, allowed -> new ArrayList<>()).add(acl);
+                    allowedBy.computeIfAbsent(principal, allowed -> new ArrayList<>()).add(new Reason(acl, null));
+                }
+            }
+        }
+        for (AclBinding acl : groupAllows) {
+            load(aloneOfAGroup, acl);
+            for (KafkaPrincipal principal : named) {
+                if (aloneOfAGroup.allows(new Asked(asked(principal), host), asked(principal), action)) {
+                    allowedBy.computeIfAbsent(principal, allowed -> new ArrayList<>())
+                            .add(new Reason(acl, group(acl)));
                 }
             }
         }
@@ -246,7 +317,17 @@ final class Access implements AutoCloseable {
             load(alone, List.of(acl, everyoneMay(resource.resourceType())));
             for (KafkaPrincipal principal : named) {
                 if (!allowed(alone, asked(principal), action)) {
-                    deniedBy.computeIfAbsent(principal, denied -> new ArrayList<>()).add(acl);
+                    deniedBy.computeIfAbsent(principal, denied -> new ArrayList<>()).add(new Reason(acl, null));
+                }
+            }
+        }
+        for (AclBinding acl : groupDenies) {
+            load(alone, List.of(acl, everyoneMay(resource.resourceType())));
+            load(aloneOfAGroup, acl);
+            for (KafkaPrincipal principal : named) {
+                if (aloneOfAGroup.denied(alone, new Asked(asked(principal), host), action)) {
+                    deniedBy.computeIfAbsent(principal, denied -> new ArrayList<>())
+                            .add(new Reason(acl, group(acl)));
                 }
             }
         }
@@ -255,11 +336,17 @@ final class Access implements AutoCloseable {
         Answer everyone = null;
         for (KafkaPrincipal principal : named) {
             boolean allowed = allowed(authorizer, asked(principal), action);
-            List<AclBinding> reasons = allowedBy.getOrDefault(principal, List.of());
+            List<Reason> reasons = allowedBy.getOrDefault(principal, List.of());
             if (!allowed && reasons.isEmpty()) {
                 continue;
             }
-            Answer answer = new Answer(principal, allowed, reasons, deniedBy.getOrDefault(principal, List.of()));
+            List<Reason> denials = deniedBy.getOrDefault(principal, List.of());
+            if (allowed && !denials.isEmpty()) {
+                // Only a DENY of a group can match where the answer is "allowed": it takes away what roles
+                // and groups give, and here an ACL allows the principal by name.
+                denials = List.of();
+            }
+            Answer answer = new Answer(principal, allowed, reasons, denials);
             if (EVERYONE.equals(principal)) {
                 everyone = answer;
             }
@@ -274,9 +361,11 @@ final class Access implements AutoCloseable {
     }
 
     /**
-     * What the bindings and the allow ACLs give the principal, one line for
-     * each record and kind of resource. A deny ACL may take some of it away:
-     * see {@link #denied}. For {@code User:*} it is what everyone is given.
+     * What the bindings and the allow ACLs give the principal, itself and as
+     * a member of its groups, one line for each record and kind of resource.
+     * A deny ACL may take some of it away: see {@link #denied}. For
+     * {@code User:*} it is what everyone is given; for a group, what it
+     * gives its members.
      *
      * @param whom the principal
      */
@@ -300,25 +389,44 @@ final class Access implements AutoCloseable {
                 }
                 if (pattern != null) {
                     lines.add(new Line(Wording.resources(pattern),
-                            Wording.operations(operations, Role.everyAclOperation()), bound.record()));
+                            Wording.operations(operations, Role.everyAclOperation()), bound.record(),
+                            through(principal, binding)));
                 }
             }
-            elsewhere(binding, bound.record(), lines);
+            elsewhere(binding, bound.record(), through(principal, binding), lines);
         }
         for (AclBinding acl : allows) {
             load(alone, List.of(acl));
             List<AclOperation> operations = matching(principal, acl.pattern(), true);
             if (!operations.isEmpty()) {
                 lines.add(new Line(Wording.resources(acl.pattern()),
-                        Wording.operations(operations, Role.everyAclOperation()), acl));
+                        Wording.operations(operations, Role.everyAclOperation()), acl, null));
+            }
+        }
+        for (AclBinding acl : groupAllows) {
+            load(aloneOfAGroup, acl);
+            List<AclOperation> operations = new ArrayList<>();
+            for (AclOperation operation : Role.everyAclOperation()) {
+                if (aloneOfAGroup.allows(new Asked(principal, host), principal,
+                        action(operation, itsOwnName(acl.pattern())))) {
+                    operations.add(operation);
+                }
+            }
+            if (!operations.isEmpty()) {
+                lines.add(new Line(Wording.resources(acl.pattern()),
+                        Wording.operations(operations, Role.everyAclOperation()), acl, throughGroup(principal, acl)));
             }
         }
         return lines;
     }
 
     /**
-     * What the deny ACLs take away from the principal, whatever gives it: a
-     * deny beats every role and every allow.
+     * What the deny ACLs take away from the principal. One that names the
+     * principal takes it away whatever gives it: a deny beats every role
+     * and every allow. One that names a group of the principal, which nobody
+     * may create and which may be in the metadata anyway, is a line with
+     * that group: it takes away what roles and groups give, and nothing an
+     * ACL allows the principal by name.
      *
      * @param whom the principal
      */
@@ -330,7 +438,22 @@ final class Access implements AutoCloseable {
             List<AclOperation> operations = matching(principal, acl.pattern(), false);
             if (!operations.isEmpty()) {
                 lines.add(new Line(Wording.resources(acl.pattern()),
-                        Wording.operations(operations, Role.everyAclOperation()), acl));
+                        Wording.operations(operations, Role.everyAclOperation()), acl, null));
+            }
+        }
+        for (AclBinding acl : groupDenies) {
+            load(alone, List.of(acl, everyoneMay(acl.pattern().resourceType())));
+            load(aloneOfAGroup, acl);
+            List<AclOperation> operations = new ArrayList<>();
+            for (AclOperation operation : Role.everyAclOperation()) {
+                if (aloneOfAGroup.denied(alone, new Asked(principal, host),
+                        action(operation, itsOwnName(acl.pattern())))) {
+                    operations.add(operation);
+                }
+            }
+            if (!operations.isEmpty()) {
+                lines.add(new Line(Wording.resources(acl.pattern()),
+                        Wording.operations(operations, Role.everyAclOperation()), acl, group(acl)));
             }
         }
         return lines;
@@ -342,7 +465,11 @@ final class Access implements AutoCloseable {
             try {
                 authorizer.close();
             } finally {
-                alone.close();
+                try {
+                    alone.close();
+                } finally {
+                    aloneOfAGroup.close();
+                }
             }
         } catch (IOException e) {
             throw new UncheckedIOException(e);
@@ -357,18 +484,21 @@ final class Access implements AutoCloseable {
      * decides: the operations of its role, as {@link Role} has them, on the
      * names the binding is for, or on every name when it is on the cluster.
      */
-    private static void elsewhere(RoleBinding binding, AclBinding record, List<Line> lines) {
+    private static void elsewhere(RoleBinding binding, AclBinding record, KafkaPrincipal through,
+            List<Line> lines) {
         RoleBinding.Target target = binding.target();
         Role role = binding.role();
         if ((target == RoleBinding.Target.SUBJECTS || target == RoleBinding.Target.CLUSTER)
                 && !role.subjectOperations().isEmpty()) {
             lines.add(new Line(target == RoleBinding.Target.CLUSTER ? "every subject" : Wording.on(binding),
-                    Wording.operations(role.subjectOperations(), List.of(SubjectOperation.values())), record));
+                    Wording.operations(role.subjectOperations(), List.of(SubjectOperation.values())), record,
+                    through));
         }
         if ((target == RoleBinding.Target.CONNECTORS || target == RoleBinding.Target.CLUSTER)
                 && !role.connectorOperations().isEmpty()) {
             lines.add(new Line(target == RoleBinding.Target.CLUSTER ? "every connector" : Wording.on(binding),
-                    Wording.operations(role.connectorOperations(), List.of(ConnectorOperation.values())), record));
+                    Wording.operations(role.connectorOperations(), List.of(ConnectorOperation.values())), record,
+                    through));
         }
     }
 
@@ -377,9 +507,37 @@ final class Access implements AutoCloseable {
         return EVERYONE.equals(principal) ? anyone : principal;
     }
 
+    /** A principal a record names: one that can be asked about, which a group cannot. */
+    private void name(KafkaPrincipal principal) {
+        if (principal != null && !BindingCodec.GROUP_TYPE.equals(principal.getPrincipalType())) {
+            named.add(principal);
+        }
+    }
+
     /** Whether the binding applies to the principal: it names one of the principal's identities. */
     private boolean holds(KafkaPrincipal principal, RoleBinding binding) {
-        return identities.of(principal).contains(binding.member());
+        return memberships.of(principal).contains(binding.member());
+    }
+
+    /** The group through which a binding that the principal holds applies to it, or {@code null}: it is its own. */
+    private static KafkaPrincipal through(KafkaPrincipal principal, RoleBinding binding) {
+        return binding.member().equals(principal) ? null : binding.member();
+    }
+
+    /** The group an ACL of a group names, or {@code null} when the principal asked about is that group. */
+    private static KafkaPrincipal throughGroup(KafkaPrincipal principal, AclBinding acl) {
+        KafkaPrincipal group = group(acl);
+        return group.equals(principal) ? null : group;
+    }
+
+    /** The group that is the principal of an ACL of a group. */
+    private static KafkaPrincipal group(AclBinding acl) {
+        return Wording.principal(acl.entry().principal());
+    }
+
+    /** The very name of an ACL's own pattern, as a resource: a name every pattern covers that has it. */
+    private static ResourcePattern itsOwnName(ResourcePattern pattern) {
+        return new ResourcePattern(pattern.resourceType(), pattern.name(), PatternType.LITERAL);
     }
 
     /**
@@ -390,7 +548,7 @@ final class Access implements AutoCloseable {
      * @param allowed the answer that means "it matches": allowed for an allow ACL, denied for a deny ACL
      */
     private List<AclOperation> matching(KafkaPrincipal principal, ResourcePattern pattern, boolean allowed) {
-        ResourcePattern resource = new ResourcePattern(pattern.resourceType(), pattern.name(), PatternType.LITERAL);
+        ResourcePattern resource = itsOwnName(pattern);
         List<AclOperation> operations = new ArrayList<>();
         for (AclOperation operation : Role.everyAclOperation()) {
             if (allowed(alone, principal, action(operation, resource)) == allowed) {
@@ -422,6 +580,10 @@ final class Access implements AutoCloseable {
         authorizer.withPluginMetrics(new PluginMetricsImpl(metrics, Map.of()));
         authorizer.loadSnapshot(Map.of());
         authorizer.completeInitialLoad();
+    }
+
+    private static void load(GroupAcls ofAGroup, AclBinding acl) {
+        ofAGroup.load(Map.of(Uuid.randomUuid(), StandardAcl.fromAclBinding(acl)));
     }
 
     private static void load(StandardAuthorizer authorizer, Collection<AclBinding> records) {

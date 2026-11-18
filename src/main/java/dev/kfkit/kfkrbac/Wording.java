@@ -106,10 +106,19 @@ final class Wording {
         return binding.role() + " to " + binding.member() + " on " + on(binding);
     }
 
-    /** A record in one phrase, as what it stands for: a binding, or an ACL. */
+    /** A membership in one phrase: {@code User:alice in Group:payments}. */
+    static String membership(BindingCodec.Membership membership) {
+        return membership.member() + " in " + membership.group();
+    }
+
+    /** A record in one phrase, as what it stands for: a binding, a membership, or an ACL. */
     static String record(AclBinding record) {
-        if (BindingCodec.decode(record) instanceof RoleBinding binding) {
+        BindingCodec.Decoded decoded = BindingCodec.decode(record);
+        if (decoded instanceof RoleBinding binding) {
             return "binding " + binding(binding);
+        }
+        if (decoded instanceof BindingCodec.Membership membership) {
+            return "membership of " + membership(membership);
         }
         AccessControlEntry entry = record.entry();
         return "ACL " + (entry.permissionType() == AclPermissionType.DENY ? "deny" : "allow") + " "
@@ -140,6 +149,15 @@ final class Wording {
                 + ",\"resourceType\":" + quoted(record.pattern().resourceType().name())
                 + ",\"name\":" + quoted(record.pattern().name())
                 + ",\"patternType\":" + quoted(record.pattern().patternType().name()) + "}";
+    }
+
+    /**
+     * A membership as the JSON object of {@code group list --output json}:
+     * the name of the group, without {@code Group:} in front, and the member.
+     */
+    static String json(BindingCodec.Membership membership) {
+        return "{\"group\":" + quoted(membership.group().getName())
+                + ",\"member\":" + quoted(membership.member().toString()) + "}";
     }
 
     private static String quoted(String text) {

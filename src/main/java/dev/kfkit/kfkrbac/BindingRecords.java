@@ -27,12 +27,13 @@ import org.apache.kafka.common.resource.ResourcePattern;
 import org.apache.kafka.common.resource.ResourceType;
 
 /**
- * Writes a role binding as the ACL record that {@link BindingCodec} reads
- * back: the format is in {@code AGENTS.md}, "The record".
+ * Writes a role binding and a group membership as the ACL records that
+ * {@link BindingCodec} reads back: the formats are in {@code AGENTS.md},
+ * "The record" and "Groups".
  *
- * <p>Nothing here decides whether a record is a binding the format allows:
- * whoever writes one reads it back with the codec first, and the cluster
- * has the last word.
+ * <p>Nothing here decides whether a record is a binding or a membership the
+ * format allows: whoever writes one reads it back with the codec first, and
+ * the cluster has the last word.
  */
 final class BindingRecords {
 
@@ -83,5 +84,18 @@ final class BindingRecords {
         }
         return new AclBinding(pattern,
                 new AccessControlEntry(role + ":" + member, "*", AclOperation.ALL, AclPermissionType.ALLOW));
+    }
+
+    /**
+     * The record of a membership: the member is in the group.
+     *
+     * @param group the name of the group, without {@code Group:} in front: {@code payments}
+     * @param member who is in it, as it is written: {@code User:alice}
+     */
+    static AclBinding membership(String group, String member) {
+        return new AclBinding(
+                new ResourcePattern(ResourceType.TOPIC, BindingCodec.GROUP_PREFIX + group, PatternType.LITERAL),
+                new AccessControlEntry(BindingCodec.MEMBER_TYPE + ":" + member, "*", AclOperation.ALL,
+                        AclPermissionType.ALLOW));
     }
 }
