@@ -232,6 +232,27 @@ final class BindingIndex implements Roles {
     }
 
     /**
+     * Whether a binding applies to the principal or it is in a group, whose
+     * bindings and ACLs are its members': when neither, nothing but the
+     * ACLs that name the principal allows it anything. On the request path,
+     * before the ACLs are asked: one lookup for its groups and one for its
+     * bindings, no lock.
+     */
+    boolean holdsAny(KafkaPrincipal principal) {
+        List<KafkaPrincipal> members = identities.of(principal);
+        if (members.size() > 1) {
+            return true;
+        }
+        Map<KafkaPrincipal, RoleBinding[]> bindings = byMember;
+        for (int i = 0; i < members.size(); i++) {
+            if (bindings.containsKey(members.get(i))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Whether a binding of the role applies to the principal, whatever it
      * names. On the request path: no lock, nothing allocated.
      */

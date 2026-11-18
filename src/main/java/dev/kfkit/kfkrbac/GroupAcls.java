@@ -182,9 +182,19 @@ final class GroupAcls implements Closeable {
      * @param principal the principal of the request, a plain {@link KafkaPrincipal}
      */
     boolean allows(AuthorizableRequestContext requestContext, KafkaPrincipal principal, Action action) {
+        return allowing(requestContext, principal, action) != null;
+    }
+
+    /**
+     * The first group of the principal that an {@code ALLOW} ACL allows the
+     * action, or {@code null} when none of its groups is allowed it.
+     *
+     * @param principal the principal of the request, a plain {@link KafkaPrincipal}
+     */
+    KafkaPrincipal allowing(AuthorizableRequestContext requestContext, KafkaPrincipal principal, Action action) {
         Map<KafkaPrincipal, StandardAcl[]> withAcls = allowsOf;
         if (withAcls.isEmpty()) {
-            return false;
+            return null;
         }
         List<KafkaPrincipal> groups = identities.of(principal);
         List<Action> quiet = null;
@@ -198,10 +208,10 @@ final class GroupAcls implements Closeable {
                         action.resourceReferenceCount(), false, false));
             }
             if (allows.authorize(new As(requestContext, group), quiet).get(0) == AuthorizationResult.ALLOWED) {
-                return true;
+                return group;
             }
         }
-        return false;
+        return null;
     }
 
     /**

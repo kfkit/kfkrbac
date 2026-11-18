@@ -25,6 +25,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -368,6 +369,12 @@ final class Node implements AutoCloseable {
     /** What the node has logged since it was created, restarts included. */
     String log() {
         return container.getLogs();
+    }
+
+    /** What the node's authorizer has written to the broker's log of its decisions, {@code kafka-authorizer.log}. */
+    String authorizerLog() {
+        return container.copyFileFromContainer(AUTHORIZER_LOG,
+                file -> new String(file.readAllBytes(), StandardCharsets.UTF_8));
     }
 
     /** The password of a user in the JAAS file. */
