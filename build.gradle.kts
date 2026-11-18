@@ -2,7 +2,7 @@ plugins {
     java
     `jvm-test-suite`
     `maven-publish`
-    id("me.champeau.jmh") version "0.7.3"
+    id("me.champeau.jmh") version "0.7.4"
 }
 
 group = "dev.kfkit"
@@ -34,7 +34,7 @@ dependencies {
     compileOnly("org.apache.kafka:kafka-clients:$kafkaVersion")
     compileOnly("org.apache.kafka:kafka-server-common:$kafkaVersion")
     // The broker ships an SLF4J; Kafka's own POM has it at runtime scope only.
-    compileOnly("org.slf4j:slf4j-api:1.7.36")
+    compileOnly("org.slf4j:slf4j-api:2.0.20")
 
     testImplementation("org.apache.kafka:kafka-metadata:$kafkaVersion")
     testImplementation("org.apache.kafka:kafka-clients:$kafkaVersion")
