@@ -15,7 +15,10 @@ One jar, one line of configuration, free and open source.
 > ([docs/command.md](docs/command.md)). The extension for Kafka Connect
 > decides connector requests from the same bindings, in unit tests; it has
 > not run in a real worker yet ([docs/connect.md](docs/connect.md)).
-> Groups, `apply` and `import` do not exist. What
+> Groups are read from membership records and honoured by the authorizer
+> ([docs/groups.md](docs/groups.md)); the command and the extension for
+> Kafka Connect do not know them yet. The `group` verbs, `apply` and
+> `import` do not exist. What
 > is described below is the design, not something you can install.
 
 ## Why
@@ -66,7 +69,8 @@ The broker asks the authorizer about every resource of every request:
    ACL allows costs what it costs today.
 2. If the ACLs did not allow it and a deny ACL matches it, it is denied. A
    deny ACL beats every role.
-3. Otherwise it is allowed when a role bound to the principal covers it,
+3. Otherwise it is allowed when a role bound to the principal, or to a
+   group it is in, covers it, or an `ALLOW` ACL of such a group allows it,
    and denied when none does or the roles cannot be read.
 
 It also asks a second question, "may this principal do this on any

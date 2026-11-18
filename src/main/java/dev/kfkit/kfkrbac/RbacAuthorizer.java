@@ -84,6 +84,12 @@ import org.slf4j.LoggerFactory;
  * has denied and a role has granted, so a request an ACL allows costs what it
  * costs without roles.
  *
+ * <p>A principal is also the groups that membership records put it in. A
+ * role bound to a group is held by its members, and an ordinary
+ * {@code ALLOW} ACL whose principal is a group, which the parent stores and
+ * never matches, is honoured for them by {@link GroupAcls}: after the
+ * parent has denied, like a role, and never against a deny ACL.
+ *
  * <p>Bindings are created and deleted through the ACL API, and
  * {@link #createAcls} and {@link #deleteAcls}, which the controller calls
  * with the caller's own principal, decide who may: the rules are
@@ -129,6 +135,9 @@ public class RbacAuthorizer extends StandardAuthorizer {
     /** The role bindings among the ACL records the broker delivers. */
     private final BindingIndex bindings;
 
+    /** The ACLs of groups among those records, which {@link #bindings} feeds. */
+    private final GroupAcls groupAcls;
+
     /** The deny ACLs of the parent and {@link #ALLOW_EVERYTHING}: denies exactly when a deny ACL matches. */
     private final StandardAuthorizer denies = new StandardAuthorizer();
 
@@ -154,6 +163,7 @@ public class RbacAuthorizer extends StandardAuthorizer {
     private RbacAuthorizer(Roles roles, BindingIndex bindings) {
         this.roles = Objects.requireNonNull(roles, "roles");
         this.bindings = bindings;
+        this.groupAcls = bindings.groupAcls();
         denies.withPluginMetrics(new PluginMetricsImpl(denyMetrics, Map.of()));
         denies.loadSnapshot(ALLOW_EVERYTHING);
     }
@@ -172,7 +182,8 @@ public class RbacAuthorizer extends StandardAuthorizer {
         super.withPluginMetrics(metrics);
         Gauge<Integer> malformed = (config, now) -> bindings.malformed();
         metrics.addMetric(metrics.metricName(MALFORMED_BINDINGS_METRIC,
-                "ACL records with a role as their principal type that are not role bindings and grant nothing.",
+                "ACL records that are not what their principal says: a role binding or a group membership the "
+                        + "format does not allow, which grants nothing, or a DENY ACL of a group.",
                 new LinkedHashMap<>()), malformed);
     }
 
@@ -275,6 +286,11 @@ public class RbacAuthorizer extends StandardAuthorizer {
                 return AuthorizationResult.DENIED;
             }
             for (ResourcePattern pattern : roles.grantedPatterns(principal, op, resourceType)) {
+                if (!coveredByDeny(requestContext, op, pattern)) {
+                    return AuthorizationResult.ALLOWED;
+                }
+            }
+            for (ResourcePattern pattern : groupAcls.allowedPatterns(requestContext, principal, op, resourceType)) {
                 if (!coveredByDeny(requestContext, op, pattern)) {
                     return AuthorizationResult.ALLOWED;
                 }
@@ -404,6 +420,7 @@ public class RbacAuthorizer extends StandardAuthorizer {
         try {
             denies.close();
             denyMetrics.close();
+            groupAcls.close();
         } finally {
             super.close();
         }
@@ -411,7 +428,8 @@ public class RbacAuthorizer extends StandardAuthorizer {
 
     /**
      * Whether a role grants an action the parent denied, or lets its holder
-     * through to the ACL API, and no deny ACL matches it.
+     * through to the ACL API, or an ACL of a group of the principal allows
+     * it, and no deny ACL matches it.
      */
     private boolean roleAllows(AuthorizableRequestContext requestContext, Action action) {
         try {
@@ -422,6 +440,12 @@ public class RbacAuthorizer extends StandardAuthorizer {
                         action.resourcePattern().resourceType()) || bindings.holds(principal, Role.SYSTEM_ADMIN);
             } else {
                 granted = opensTheAclApi(requestContext, action) && bindings.holds(principal, Role.RESOURCE_OWNER);
+            }
+            if (!granted) {
+                // An ACL of a group is not "the ACLs alone": what only SystemAdmin answers, it does not.
+                granted = !keptForSystemAdmin(requestContext, action.operation(),
+                        action.resourcePattern().resourceType())
+                        && groupAcls.allows(requestContext, principal, action);
             }
             return granted
                     && !denied(requestContext, action.operation(), action.resourcePattern(),
@@ -547,7 +571,8 @@ public class RbacAuthorizer extends StandardAuthorizer {
     private boolean denied(AuthorizableRequestContext requestContext, AclOperation op, ResourcePattern resource,
             int resourceReferenceCount) {
         Action quiet = new Action(op, resource, resourceReferenceCount, false, false);
-        return denies.authorize(requestContext, List.of(quiet)).get(0) == AuthorizationResult.DENIED;
+        return denies.authorize(requestContext, List.of(quiet)).get(0) == AuthorizationResult.DENIED
+                || groupAcls.denied(denies, requestContext, quiet);
     }
 
     private static Map<Uuid, StandardAcl> allowEverything() {

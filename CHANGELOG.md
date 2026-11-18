@@ -20,8 +20,7 @@ major version is 0.
   delivers and decides with them: a principal that holds a role on a pattern,
   or on the cluster, is allowed what the role grants there. A record of a
   role that is not a well-formed binding grants nothing, is logged once and
-  counted in the gauge `malformed-bindings`. Group membership is not
-  honoured yet.
+  counted in the gauge `malformed-bindings`.
 - `RbacAuthorizer` decides who may create and delete ACL records: a
   principal that the ACLs alone allow `ALTER` on the cluster, as before, or
   a `SystemAdmin` anything; a `ResourceOwner` role bindings on patterns
@@ -58,6 +57,21 @@ major version is 0.
   are in the MBean `kfkrbac:type=rest-bindings`. See
   [docs/connect.md](docs/connect.md). Members of groups are not honoured
   yet.
+- Groups. A membership record, an ACL whose principal is `Member:<member>`
+  on the literal topic name `Group:<name>`, puts a principal in a group. A
+  role bound to a group (`DeveloperRead:Group:payments`) is held by its
+  members, and an ordinary `ALLOW` ACL whose principal is a group is
+  honoured for them by the broker's own matching rules, in `authorize` and
+  in `authorizeByResourceType`; a deny ACL that names the user beats both.
+  Membership is created and deleted by whoever creates any ACL: a principal
+  that the ACLs allow `ALTER` on the cluster, or a `SystemAdmin`. A
+  membership the format does not allow, a group as a member included, is
+  refused when it is created; one that is in the metadata anyway puts nobody
+  in a group, is logged once and counted in the gauge `malformed-bindings`.
+  A `DENY` ACL whose principal is a group is refused when it is created, for
+  everyone. See [docs/groups.md](docs/groups.md).
+- A JMH benchmark of `authorize` for a principal in 0, 1 and 20 groups:
+  `GroupsBenchmark`.
 - A release workflow: a `vX.Y.Z` tag runs the whole check and publishes a
   GitHub Release with the jar, its SHA-256, a keyless cosign signature and a
   build provenance attestation. How to verify a released jar is in

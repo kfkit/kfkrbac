@@ -166,8 +166,9 @@ defect, not a trade-off. The map:
   A group can be the member of a binding (`DeveloperRead:Group:payments`) and
   the principal of an ordinary `ALLOW` ACL, which this authorizer honours for
   its members; a `DENY` ACL that names a group is refused when it is created,
-  because the parent would not apply it. Only `super.users` and `SystemAdmin`
-  manage membership. Groups carried by the principal itself come later.
+  because the parent would not apply it. Membership is managed by whoever
+  manages every ACL: a principal the ACLs allow `ALTER` on the cluster, or a
+  `SystemAdmin`. Groups carried by the principal itself come later.
 - **What a delegate sees and deletes.** To use the ACL tool a resource owner
   must be allowed to list ACLs, and the listing cannot be narrowed to the
   caller: it sees every ACL and binding of the cluster. A delegate's delete

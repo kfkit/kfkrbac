@@ -299,6 +299,26 @@ class RbacCommandTest {
                 run("list"));
     }
 
+    @Test
+    void listSaysWhichRecordIsNotAMembershipAndWhichDeniesAGroup() {
+        cluster.records.add(binding("DeveloperRead:User:alice", BILLING));
+        cluster.records.add(binding("Member:User:alice", literal(TOPIC, "Group:payments")));
+        cluster.records.add(binding("Member:Group:billing", literal(TOPIC, "Group:payments")));
+        cluster.records.add(acl("Group:payments", BILLING, READ, "*", DENY).toBinding());
+        cluster.records.add(acl("Group:payments", BILLING, READ, "*", ALLOW).toBinding());
+
+        Ran ran = run("list");
+
+        assertEquals(0, ran.status());
+        List<String> warnings = ran.err().lines().toList();
+        assertEquals(2, warnings.size(), ran.err());
+        assertTrue(warnings.stream().anyMatch(line -> line.startsWith("warning: not a group membership, puts nobody"
+                + " in a group: Member:Group:billing on ") && line.endsWith(": the member is a group, and a group"
+                        + " is not a member of a group")), ran.err());
+        assertTrue(warnings.stream().anyMatch(line -> line.startsWith("warning: a DENY for a group, takes away only"
+                + " what roles and groups give its members: Group:payments on ")), ran.err());
+    }
+
     // --- AC3: who-can ---------------------------------------------------------------
 
     @Test

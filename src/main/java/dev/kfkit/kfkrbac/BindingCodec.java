@@ -15,6 +15,8 @@
  */
 package dev.kfkit.kfkrbac;
 
+import java.util.Objects;
+
 import org.apache.kafka.common.acl.AclBinding;
 import org.apache.kafka.common.acl.AclOperation;
 import org.apache.kafka.common.acl.AclPermissionType;
@@ -28,19 +30,24 @@ import org.apache.kafka.metadata.authorizer.StandardAcl;
  * Reads an ACL record as what it stands for: a role binding, a group
  * membership, or an ordinary ACL.
  *
- * <p>A binding is an ACL whose principal is {@code <Role>:<member>}; the
- * record format is in {@code AGENTS.md}, "The record". The record comes in
- * two shapes, and both are read by the same rules: the broker hands the
- * authorizer a {@link StandardAcl}, a client reads an {@link AclBinding}.
+ * <p>A binding is an ACL whose principal is {@code <Role>:<member>}, a
+ * membership one whose principal is {@code Member:<member>}; the record
+ * formats are in {@code AGENTS.md}, "The record" and "Groups". The record
+ * comes in two shapes, and both are read by the same rules: the broker hands
+ * the authorizer a {@link StandardAcl}, a client reads an {@link AclBinding}.
  *
- * <p>A record whose principal type is a role but which the format does not
- * allow is {@link Malformed}: it is never a binding, so it grants nothing.
- * Nothing here throws on a record, whatever is in it.
+ * <p>A record whose principal type is a role or {@code Member} but which the
+ * format does not allow is {@link Malformed}: it is never a binding and never
+ * a membership, so it grants nothing. So is a {@code DENY} ACL whose
+ * principal is a group. Nothing here throws on a record, whatever is in it.
  */
 final class BindingCodec {
 
     /** The principal type of a group-membership record: {@code Member:User:alice}. */
     static final String MEMBER_TYPE = "Member";
+
+    /** The principal type of a group: {@code Group:payments}. */
+    static final String GROUP_TYPE = "Group";
 
     /** In front of the name of a binding for subjects of a schema registry. */
     static final String SUBJECT_PREFIX = "Subject:";
@@ -59,28 +66,86 @@ final class BindingCodec {
     }
 
     /**
-     * A group-membership record: its principal type is {@code Member}.
-     * Recognised so that it is not taken for anything else; what it says is
-     * not read yet.
+     * A group-membership record: the member is in the group. Made only from
+     * a well-formed record, so the member is never a group.
+     *
+     * @param member who is in the group: {@code User:alice}
+     * @param group the group, as a principal: {@code Group:payments}
      */
-    record Membership() implements Decoded {
+    record Membership(KafkaPrincipal member, KafkaPrincipal group) implements Decoded {
+
+        Membership {
+            Objects.requireNonNull(member, "member");
+            Objects.requireNonNull(group, "group");
+        }
     }
 
-    /** An ACL like any other: its principal type is neither a role nor {@code Member}. */
+    /**
+     * An ACL like any other: its principal type is neither a role nor
+     * {@code Member}. An {@code ALLOW} ACL whose principal is a group is one
+     * of them.
+     */
     record Ordinary() implements Decoded {
     }
 
     /**
-     * A record whose principal type is a role and which is not a binding
-     * the format allows. It grants nothing.
+     * A record that is not what its principal says it is, and that nobody
+     * may create. It grants nothing.
      *
+     * @param kind what it fails to be
      * @param reason what is wrong with it, for the operator
      */
-    record Malformed(String reason) implements Decoded {
+    record Malformed(Kind kind, String reason) implements Decoded {
+
+        /** What a malformed record fails to be. */
+        enum Kind {
+            /** Its principal type is a role, and it is not a binding the format allows. */
+            BINDING("has a role as its principal type", "is not a role binding", "so it grants nothing"),
+            /** Its principal type is {@code Member}, and it is not a membership the format allows. */
+            MEMBERSHIP("has " + MEMBER_TYPE + " as its principal type", "is not a group membership",
+                    "so it puts nobody in a group"),
+            /** It is a {@code DENY} ACL whose principal is a group. */
+            GROUP_DENY("has a group as its principal", "is a DENY for a group",
+                    "so it takes away what roles and groups give the members and nothing an ACL allows them");
+
+            private final String looksLike;
+            private final String fault;
+            private final String consequence;
+
+            Kind(String looksLike, String fault, String consequence) {
+                this.looksLike = looksLike;
+                this.fault = fault;
+                this.consequence = consequence;
+            }
+
+            /** What makes the record look like what it is not: {@code has a role as its principal type}. */
+            String looksLike() {
+                return looksLike;
+            }
+
+            /** What is wrong with it, in a few words: {@code is not a role binding}. */
+            String fault() {
+                return fault;
+            }
+
+            /** What becomes of such a record that is in the metadata anyway: {@code so it grants nothing}. */
+            String consequence() {
+                return consequence;
+            }
+        }
+
+        /** A record of a role that is not a binding. */
+        Malformed(String reason) {
+            this(Kind.BINDING, reason);
+        }
     }
 
-    private static final Membership MEMBERSHIP = new Membership();
     private static final Ordinary ORDINARY = new Ordinary();
+
+    /** Why a deny of a group is refused, for whoever tries to create one. */
+    private static final Malformed GROUP_DENY = new Malformed(Malformed.Kind.GROUP_DENY,
+            "a group only adds access, and a DENY for a group cannot take away what an ACL allows a member by"
+            + " name; deny the users by name instead");
 
     private BindingCodec() {
     }
@@ -105,11 +170,12 @@ final class BindingCodec {
         }
         String principalType = principal.substring(0, colon);
         if (MEMBER_TYPE.equals(principalType)) {
-            return MEMBERSHIP;
+            return membership(principal.substring(colon + 1), resourceType, resourceName, patternType, host,
+                    operation, permission);
         }
         Role role = Role.named(principalType).orElse(null);
         if (role == null) {
-            return ORDINARY;
+            return GROUP_TYPE.equals(principalType) && permission != AclPermissionType.ALLOW ? GROUP_DENY : ORDINARY;
         }
         if (operation != AclOperation.ALL) {
             return new Malformed("the operation is " + operation + ", a binding has ALL");
@@ -128,6 +194,43 @@ final class BindingCodec {
             return onTheCluster(role, member, resourceName, patternType);
         }
         return onAPattern(role, member, resourceType, resourceName, patternType);
+    }
+
+    private static Decoded membership(String memberText, ResourceType resourceType, String resourceName,
+            PatternType patternType, String host, AclOperation operation, AclPermissionType permission) {
+        if (operation != AclOperation.ALL) {
+            return notAMembership("the operation is " + operation + ", a membership has ALL");
+        }
+        if (permission != AclPermissionType.ALLOW) {
+            return notAMembership("the permission is " + permission + ", a membership has ALLOW");
+        }
+        if (!"*".equals(host)) {
+            return notAMembership("the host is " + host + ", a membership has *");
+        }
+        KafkaPrincipal member = member(memberText);
+        if (member == null) {
+            return notAMembership("the member is not <type>:<name>, as in " + MEMBER_TYPE + ":User:alice");
+        }
+        if (GROUP_TYPE.equals(member.getPrincipalType())) {
+            return notAMembership("the member is a group, and a group is not a member of a group");
+        }
+        if (resourceType != ResourceType.TOPIC) {
+            return notAMembership("the resource type is " + resourceType + ", a membership has TOPIC");
+        }
+        if (patternType != PatternType.LITERAL) {
+            return notAMembership("the pattern type is " + patternType + ", a membership has LITERAL");
+        }
+        if (resourceName == null || !resourceName.startsWith(GROUP_PREFIX)
+                || resourceName.length() == GROUP_PREFIX.length()) {
+            return notAMembership("the name is '" + resourceName + "', a membership is on the name " + GROUP_PREFIX
+                    + "<name>, as in " + GROUP_PREFIX + "payments");
+        }
+        return new Membership(member,
+                new KafkaPrincipal(GROUP_TYPE, resourceName.substring(GROUP_PREFIX.length())));
+    }
+
+    private static Malformed notAMembership(String reason) {
+        return new Malformed(Malformed.Kind.MEMBERSHIP, reason);
     }
 
     private static Decoded onTheCluster(Role role, KafkaPrincipal member, String resourceName,
@@ -181,7 +284,10 @@ final class BindingCodec {
         return new RoleBinding(role, member, elsewhere, name, patternType);
     }
 
-    /** The member of a binding, {@code User:alice}, or {@code null} when it is not a type and a name. */
+    /**
+     * The member of a binding or of a group, {@code User:alice}, or
+     * {@code null} when it is not a type and a name.
+     */
     private static KafkaPrincipal member(String text) {
         int colon = text.indexOf(':');
         if (colon <= 0 || colon == text.length() - 1) {

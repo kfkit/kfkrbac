@@ -34,16 +34,19 @@ import org.apache.kafka.common.security.auth.KafkaPrincipal;
  *
  * <ul>
  * <li>A record whose principal type is a role must be a well-formed binding
- * to be created, whoever asks.
+ * to be created, and one whose principal type is {@code Member} a well-formed
+ * group membership, whoever asks. Nobody creates a {@code DENY} ACL whose
+ * principal is a group.
  * <li>A principal that the ACLs alone allow {@code ALTER} on the cluster,
  * which a super user is, or one that holds {@code SystemAdmin}, creates any
  * well-formed binding, any membership record and any ordinary ACL, and
  * deletes any record. The first could before there were roles, and ACLs
  * mean what they meant.
  * <li>A principal that holds {@code ResourceOwner} creates and deletes
- * bindings of the roles that are bound to a name pattern, on patterns one of
- * its own {@code ResourceOwner} bindings {@linkplain #covers covers}, and
- * nothing else.
+ * bindings of the roles that are bound to a name pattern, to users and to
+ * groups alike, on patterns one of its own {@code ResourceOwner} bindings
+ * {@linkplain #covers covers}, and nothing else: no membership, so it does
+ * not decide who is in a group.
  * <li>Everyone else creates and deletes nothing.
  * <li>A request is decided as a whole: one refused record refuses them all.
  * </ul>
@@ -114,7 +117,10 @@ final class Delegation {
     enum Outcome {
         /** The caller may, and so may the rest of the request. */
         ALLOWED,
-        /** The record has a role as its principal type and is not a binding: nobody creates it. */
+        /**
+         * Nobody creates the record: it has a role as its principal type and is not a binding, or
+         * {@code Member} and is not a group membership, or it is a {@code DENY} ACL of a group.
+         */
         MALFORMED,
         /** The caller may not. */
         FORBIDDEN,
@@ -174,7 +180,7 @@ final class Delegation {
         for (AclBinding record : records) {
             BindingCodec.Decoded decoded = BindingCodec.decode(record);
             if (decoded instanceof BindingCodec.Malformed malformed) {
-                answers.add(new Answer(Outcome.MALFORMED, describe(record) + " is not a role binding: "
+                answers.add(new Answer(Outcome.MALFORMED, describe(record) + " " + malformed.kind().fault() + ": "
                         + malformed.reason()));
                 continue;
             }
@@ -281,7 +287,7 @@ final class Delegation {
             return "a record of group membership is managed only by " + WHOEVER_MANAGES_EVERYTHING;
         }
         if (record instanceof BindingCodec.Malformed malformed) {
-            return "it is not a role binding (" + malformed.reason()
+            return "it " + malformed.kind().fault() + " (" + malformed.reason()
                     + "), and such a record is deleted only by " + WHOEVER_MANAGES_EVERYTHING;
         }
         if (!(record instanceof RoleBinding wanted)) {
@@ -326,7 +332,9 @@ final class Delegation {
     /** A record as the caller wrote it: {@code DeveloperRead:User:alice on the TOPIC prefix 'billing.'}. */
     private static String describe(AclBinding record) {
         String what = record.entry().principal();
-        if (BindingCodec.decode(record) instanceof BindingCodec.Ordinary) {
+        BindingCodec.Decoded decoded = BindingCodec.decode(record);
+        if (decoded instanceof BindingCodec.Ordinary || decoded instanceof BindingCodec.Malformed malformed
+                && malformed.kind() == BindingCodec.Malformed.Kind.GROUP_DENY) {
             what = "the ACL " + what + " " + record.entry().permissionType() + " " + record.entry().operation()
                     + " from host " + record.entry().host();
         }

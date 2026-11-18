@@ -1,12 +1,14 @@
 # Roles
 
-A role names a set of permissions once. A role binding hands it to a member
-(`User:alice`) on a name pattern or on the cluster. There are seven roles,
-and they only ever add access: what a deny ACL denies stays denied.
+A role names a set of permissions once. A role binding hands it to a member,
+a user (`User:alice`) or a group (`Group:payments`), on a name pattern or on
+the cluster. There are seven roles, and they only ever add access: what a
+deny ACL denies stays denied.
 
 A role's meaning never changes once it is released: a different set of
 permissions gets a different name. Operators do not define roles of their
-own; a group that ordinary ACLs name does that job.
+own; a group that ordinary ACLs name does that job. Groups are in
+[groups.md](groups.md).
 
 > Status: the authorizer reads bindings from ACL records and decides with
 > them, on real brokers too in the integration tests; the extension for
@@ -100,10 +102,17 @@ above, grants nothing: an operation other than `All`, a `Deny`, a host other
 than `*`, a cluster role on a name pattern or a pattern role on the cluster,
 a member that is not `Type:name`. The authorizer logs it once, at `WARN`,
 with the ID of the record, and counts such records in the gauge
-`malformed-bindings` of its plugin metrics for as long as they exist.
+`malformed-bindings` of its plugin metrics for as long as they exist. The
+same gauge counts the records that are not group memberships and the `DENY`
+ACLs of groups: see [groups.md](groups.md).
 
 ## Reserved names
 
 The names of the roles are reserved as principal types: no client may
 authenticate as a principal of type `DeveloperRead`, so a binding never
-matches as an ordinary ACL.
+matches as an ordinary ACL. So are `Member`, the principal type of a group
+membership, and `Group`, the principal type of a group.
+
+`Subject:`, `Connector:` and `Group:` are reserved in front of a name: the
+first two say what a binding is for, and the third names the group of a
+membership record, so no binding's name starts with it.

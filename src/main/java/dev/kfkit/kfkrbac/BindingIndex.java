@@ -40,9 +40,11 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Fed with every ACL record the broker delivers ({@link #add},
  * {@link #remove}, {@link #load}); it keeps the ones {@link BindingCodec}
- * reads as bindings and leaves the rest to the parent authorizer. A record
- * that looks like a binding and is not one grants nothing; it is logged once
- * and counted for as long as it is in the metadata.
+ * reads as bindings, hands the group memberships to {@link Memberships} and
+ * the ACLs of groups to {@link GroupAcls}, and leaves the rest to the parent
+ * authorizer. A record that looks like a binding or a membership and is not
+ * one grants nothing; it is logged once and counted for as long as it is in
+ * the metadata, and so is a {@code DENY} ACL of a group.
  *
  * <p>Reads are on the request path and take no lock: one lookup by member
  * for each identity of the principal, then a walk over that member's own
@@ -55,7 +57,14 @@ final class BindingIndex implements Roles {
 
     private static final Logger LOG = LoggerFactory.getLogger(BindingIndex.class);
 
+    /** The groups the membership records make. */
+    private final Memberships memberships = new Memberships();
+
+    /** Which members a binding may name for it to apply to a principal: {@link #memberships} on a broker. */
     private final Identities identities;
+
+    /** The ordinary ACLs whose principal is a group. */
+    private final GroupAcls groupAcls;
 
     /** What each member holds. The arrays are never written to once they are here. */
     private volatile ConcurrentHashMap<KafkaPrincipal, RoleBinding[]> byMember = new ConcurrentHashMap<>();
@@ -63,17 +72,26 @@ final class BindingIndex implements Roles {
     /** The bindings by the ID of their record, to remove them by. Guarded by {@code this}. */
     private final Map<Uuid, RoleBinding> byId = new HashMap<>();
 
-    /** The records that look like bindings and are not, by ID. Guarded by {@code this}. */
+    /** The records that are not what their principal says, by ID. Guarded by {@code this}. */
     private final Map<Uuid, StandardAcl> malformed = new HashMap<>();
 
     private volatile int malformedCount;
 
+    /** A principal is in the groups the membership records put it in. */
     BindingIndex() {
-        this(Identities.SELF);
+        this.identities = memberships;
+        this.groupAcls = new GroupAcls(memberships);
     }
 
+    /** A principal is in the groups given, whatever the membership records say. */
     BindingIndex(Identities identities) {
         this.identities = Objects.requireNonNull(identities, "identities");
+        this.groupAcls = new GroupAcls(identities);
+    }
+
+    /** The ordinary ACLs whose principal is a group, among the records this is fed. */
+    GroupAcls groupAcls() {
+        return groupAcls;
     }
 
     // --- the metadata thread ---------------------------------------------------
@@ -85,10 +103,19 @@ final class BindingIndex implements Roles {
         if (decoded instanceof RoleBinding binding) {
             byId.put(id, binding);
             byMember.merge(binding.member(), new RoleBinding[] {binding}, BindingIndex::with);
-        } else if (decoded instanceof BindingCodec.Malformed notABinding) {
+            return;
+        }
+        if (decoded instanceof BindingCodec.Membership membership) {
+            memberships.add(id, membership);
+            return;
+        }
+        if (decoded instanceof BindingCodec.Malformed notWhatItSays) {
             malformed.put(id, acl);
             malformedCount = malformed.size();
-            warn(id, acl, notABinding);
+            warn(id, acl, notWhatItSays);
+        }
+        if (GroupAcls.ofAGroup(acl)) {
+            groupAcls.add(id, acl);
         }
     }
 
@@ -101,28 +128,52 @@ final class BindingIndex implements Roles {
         if (malformed.remove(id) != null) {
             malformedCount = malformed.size();
         }
+        memberships.remove(id);
+        groupAcls.remove(id);
     }
 
-    /** These are now all the ACL records of the cluster. */
+    /**
+     * These are now all the ACL records of the cluster.
+     *
+     * <p>The bindings are replaced at once. The groups are not in the same
+     * place, so while the bindings and the ACLs of groups are replaced a
+     * member is only in the groups it is in both before and after: what a
+     * request is allowed at any moment, the records before or the records
+     * after allow.
+     */
     synchronized void load(Map<Uuid, StandardAcl> acls) {
         Map<Uuid, RoleBinding> bindings = new HashMap<>();
         Map<Uuid, StandardAcl> notBindings = new HashMap<>();
         Map<KafkaPrincipal, List<RoleBinding>> held = new HashMap<>();
+        Map<Uuid, BindingCodec.Membership> members = new HashMap<>();
+        Map<Uuid, StandardAcl> ofGroups = new HashMap<>();
         acls.forEach((id, acl) -> {
             BindingCodec.Decoded decoded = BindingCodec.decode(acl);
             if (decoded instanceof RoleBinding binding) {
                 bindings.put(id, binding);
                 held.computeIfAbsent(binding.member(), member -> new ArrayList<>()).add(binding);
-            } else if (decoded instanceof BindingCodec.Malformed notABinding) {
+                return;
+            }
+            if (decoded instanceof BindingCodec.Membership membership) {
+                members.put(id, membership);
+                return;
+            }
+            if (decoded instanceof BindingCodec.Malformed notWhatItSays) {
                 notBindings.put(id, acl);
                 if (!acl.equals(malformed.get(id))) {
-                    warn(id, acl, notABinding);
+                    warn(id, acl, notWhatItSays);
                 }
+            }
+            if (GroupAcls.ofAGroup(acl)) {
+                ofGroups.put(id, acl);
             }
         });
         ConcurrentHashMap<KafkaPrincipal, RoleBinding[]> loaded = new ConcurrentHashMap<>();
         held.forEach((member, list) -> loaded.put(member, list.toArray(new RoleBinding[0])));
+        memberships.narrow(members.values());
         byMember = loaded;
+        groupAcls.load(ofGroups);
+        memberships.load(members);
         byId.clear();
         byId.putAll(bindings);
         malformed.clear();
@@ -130,7 +181,11 @@ final class BindingIndex implements Roles {
         malformedCount = notBindings.size();
     }
 
-    /** How many records in the metadata look like bindings and are not: they grant nothing. */
+    /**
+     * How many records in the metadata are not what their principal says: a
+     * binding or a membership the format does not allow, which grants
+     * nothing, or a {@code DENY} ACL of a group.
+     */
     int malformed() {
         return malformedCount;
     }
@@ -214,9 +269,9 @@ final class BindingIndex implements Roles {
         return all;
     }
 
-    private static void warn(Uuid id, StandardAcl acl, BindingCodec.Malformed notABinding) {
-        LOG.warn("ACL {} has a role as its principal type and is not a role binding, so it grants nothing: {}: {}",
-                id, notABinding.reason(), acl);
+    private static void warn(Uuid id, StandardAcl acl, BindingCodec.Malformed notWhatItSays) {
+        LOG.warn("ACL {} {} and {}, {}: {}: {}", id, notWhatItSays.kind().looksLike(), notWhatItSays.kind().fault(),
+                notWhatItSays.kind().consequence(), notWhatItSays.reason(), acl);
     }
 
     private static RoleBinding[] with(RoleBinding[] held, RoleBinding[] added) {
