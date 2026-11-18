@@ -72,6 +72,18 @@ major version is 0.
   everyone. See [docs/groups.md](docs/groups.md).
 - A JMH benchmark of `authorize` for a principal in 0, 1 and 20 groups:
   `GroupsBenchmark`.
+- Access metrics on request: with `kfkrbac.metrics.enabled=true` the
+  authorizer publishes every verdict it gives, after the ACLs and the roles
+  have decided, as the metrics of [kfkwho](https://github.com/kfkit/kfkwho),
+  under kfkwho's MBean names and `kfkwho.*` settings, so that its exporter
+  rules work unchanged. Off by default: without the setting no MBean is
+  registered, no thread is started and no `kfkwho.*` setting is read. See
+  [docs/metrics.md](docs/metrics.md).
+- The jar is self-contained: the classes of kfkwho 0.1.0 that the metrics
+  need are inside it, relocated into `dev.kfkit.kfkrbac.shaded.kfkwho`, with
+  `META-INF/LICENSE` and `META-INF/NOTICE`. It has no dependency and can be
+  in `libs/` next to kfkwho's own jar. The build takes kfkwho from its
+  GitHub release and checks its SHA-256.
 - A release workflow: a `vX.Y.Z` tag runs the whole check and publishes a
   GitHub Release with the jar, its SHA-256, a keyless cosign signature and a
   build provenance attestation. How to verify a released jar is in

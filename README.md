@@ -92,7 +92,7 @@ echo 'authorizer.class.name=dev.kfkit.kfkrbac.RbacAuthorizer' >> "$KAFKA_HOME/co
 ```
 
 Then restart, node by node. The jar has no dependencies to install next to
-it. A release carries the jar, its SHA-256 and a keyless signature; how to
+it: what it needs of kfkwho is inside. A release carries the jar, its SHA-256 and a keyless signature; how to
 verify them is in [docs/provenance](docs/provenance/README.md), and the
 steps are in [docs/install.md](docs/install.md).
 
