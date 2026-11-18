@@ -1,7 +1,7 @@
 # The command
 
-`RbacCommand` manages role bindings in an operator's own terms and answers
-two questions: who can do this, and what may this principal do. It is a
+`RbacCommand` manages role bindings and groups in an operator's own terms
+and answers two questions: who can do this, and what may this principal do. It is a
 class in the same jar as the authorizer, run with the script the Kafka
 distribution ships:
 
@@ -16,12 +16,24 @@ It talks to the cluster through the admin client only, with three calls:
 list ACLs, create ACLs, delete ACLs. So it needs no access the ACL tool
 would not need, the cluster refuses what the caller may not do, and
 everything it does can be done with the ACL tool as well: a binding is an
-ACL record ([roles.md](roles.md)). The command is a convenience, never the
-only way.
+ACL record ([roles.md](roles.md)), and so is a membership of a group
+([groups.md](groups.md)). The command is a convenience, never the only way.
 
-> Status: `bind`, `unbind`, `list`, `who-can` and `what-can` exist. Groups
-> (`group add`, `group remove`, `group list`, and their members in `who-can`
-> and `what-can`), `apply` and `import` do not exist yet.
+> Status: `bind`, `unbind`, `list`, `group add`, `group remove`,
+> `group list`, `who-can` and `what-can` exist, and run against real brokers
+> of every supported release in the integration suite. `apply` and `import`
+> do not exist yet.
+
+| Verb | Does |
+|---|---|
+| [`bind`](#bind) | binds a role to a member |
+| [`unbind`](#unbind) | removes one binding |
+| [`list`](#list) | lists the bindings |
+| [`group add`](#group-add-group-remove) | puts a member in a group |
+| [`group remove`](#group-add-group-remove) | takes a member out of a group |
+| [`group list`](#group-list) | lists the groups and their members |
+| [`who-can`](#who-can) | who may do an operation on a resource, and why |
+| [`what-can`](#what-can) | what a principal may do, and why |
 
 ## Options of every verb
 
@@ -32,7 +44,8 @@ only way.
 | `--help` | print the usage of the verb and do nothing; without a verb, of every verb |
 
 An option takes its value as the next word or after `=`: `--role DeveloperRead`
-or `--role=DeveloperRead`. The verb comes first.
+or `--role=DeveloperRead`. The verb comes first; `group add`, `group remove`
+and `group list` are verbs of two words.
 
 ## Exit status
 
@@ -57,7 +70,7 @@ Bound DeveloperRead to User:alice on prefix billing.
 | Option | Meaning |
 |---|---|
 | `--role <role>` | one of the seven roles of [roles.md](roles.md); required |
-| `--member <type:name>` | who gets the role: `User:alice`; required |
+| `--member <type:name>` | who gets the role: `User:alice`, or a group, `Group:payments`; required |
 | `--prefix <prefix>` | every name that starts with the prefix |
 | `--name <name>` | that one name; `*` is every name |
 | `--group-only` | the pattern is for groups only |
@@ -174,6 +187,83 @@ The five fields are the record as it is in the cluster's metadata, so what
 `list` prints is what any tool that manages ACLs sees. The order is fixed:
 by resource type, name, pattern type, role and member.
 
+## group add, group remove
+
+`group add` puts a member in a group, and `group remove` takes it out and
+does nothing else: the bindings and the ACLs of the group stay. What a group
+is and what it gives its members is in [groups.md](groups.md).
+
+```console
+$ rbac group add --group payments --member User:alice
+Added User:alice to Group:payments
+$ rbac bind --role DeveloperRead --member Group:payments --prefix billing.
+Bound DeveloperRead to Group:payments on prefix billing.
+$ rbac group remove --group payments --member User:alice
+Removed User:alice from Group:payments
+$ rbac group remove --group payments --member User:alice
+error: no such membership: User:alice in Group:payments
+$ echo $?
+1
+```
+
+| Option | Meaning |
+|---|---|
+| `--group <name>` | the name of the group, without `Group:` in front: `payments`; required |
+| `--member <type:name>` | who joins or leaves it: `User:alice`; required |
+
+A group is not created or deleted: it is there for as long as it has a
+member. Adding who is in the group already changes nothing. A group is not a
+member of a group, and `--member Group:billing` is wrong usage.
+
+What `group add` writes is the membership record, the one the ACL tool
+would write with `--allow-principal 'Member:User:alice' --operation All
+--topic 'Group:payments'`.
+
+## group list
+
+Lists the members of the groups, one membership on a line. It changes
+nothing.
+
+```console
+$ rbac group list
+GROUP     MEMBER
+audit     User:dave
+payments  User:alice
+payments  User:carol
+$ rbac group list --group audit
+GROUP  MEMBER
+audit  User:dave
+```
+
+| Option | Meaning |
+|---|---|
+| `--group <name>` | only the members of that group |
+| `--output text\|json` | `text` by default |
+
+Without a membership it prints `No groups.`, and for a group nobody is in,
+`Group:payments has no members.` A record whose principal type is `Member`
+and which is not a membership puts nobody in a group
+([groups.md](groups.md), "A record that is not a membership"); it is not
+listed, and a warning on standard error names it.
+
+`--output json` prints one array with one object for each membership, and
+`[]` when there is none. The shape is stable: fields may be added, these two
+stay. The order is fixed: by group, then by member.
+
+```console
+$ rbac group list --output json
+[
+  {"group":"audit","member":"User:dave"},
+  {"group":"payments","member":"User:alice"},
+  {"group":"payments","member":"User:carol"}
+]
+```
+
+| Field | Value |
+|---|---|
+| `group` | the name of the group, as `--group` takes it: `payments` |
+| `member` | who is in it: `User:alice` |
+
 ## who-can
 
 Names every principal a role or an ACL lets do an operation on a resource,
@@ -227,13 +317,39 @@ User:carol  denied
 Not counted: what the brokers' own settings allow (super.users, allow.everyone.if.no.acl.found).
 ```
 
+### Groups
+
+A member of a group is named for what the group is given: a role bound to
+the group, or an `ALLOW` ACL whose principal is the group. The line says
+which group. The group itself is not named, since no client is a group, and
+a group nobody is in gives nobody anything.
+
+```console
+$ rbac who-can --operation Read --topic billing.orders
+Read on topic billing.orders:
+
+User:alice  allowed
+    allowed by binding DeveloperRead to Group:payments on prefix billing., as a member of Group:payments
+User:bob  allowed
+    allowed by binding DeveloperRead to User:bob on prefix billing.
+User:carol  denied
+    denied by ACL deny User:carol Read on topic billing.orders
+    without that, allowed by binding DeveloperRead to Group:payments on prefix billing., as a member of Group:payments
+User:dave  allowed
+    allowed by ACL allow Group:audit Read on topic billing.orders, as a member of Group:audit
+
+Not counted: what the brokers' own settings allow (super.users, allow.everyone.if.no.acl.found).
+```
+
 ### How the answer is computed
 
 The command lists the ACL records of the cluster and gives them to the
 authorizer itself, inside the tool, the way a broker gives them to its own:
 whether a principal is allowed is that authorizer's answer, by the same
 code and the same rules of matching. The reasons are found by asking about
-one record at a time.
+one record at a time. Which groups a principal is in, and whether an ACL of
+a group applies to it, is asked of the classes a broker decides that with,
+fed the membership records of the cluster.
 
 The question is the operation on the resource, as an ordinary request asks
 it. A few requests are decided by rules of their own, and `who-can` does not
@@ -275,7 +391,7 @@ Not counted: what the brokers' own settings allow (super.users, allow.everyone.i
 
 | Option | Meaning |
 |---|---|
-| `--principal <type:name>` | the principal: `User:alice`; `User:*` is what everyone may do; required |
+| `--principal <type:name>` | the principal: `User:alice`; `User:*` is what everyone may do, `Group:payments` what that group gives its members; required |
 | `--host <address>` | the address the request comes from, as for `who-can` |
 
 There is one line for each record and kind of resource: what the record
@@ -291,8 +407,47 @@ what the principal may bind, and whether it may list the ACLs, is not in
 it.
 
 The lines for subjects and connectors say what the role of the binding
-grants there ([roles.md](roles.md)). A broker never decides those requests,
-and nothing in this jar answers them yet.
+grants there ([roles.md](roles.md)). A broker never decides those requests:
+the extension for Kafka Connect answers for connectors
+([connect.md](connect.md)), and nothing in this jar answers for subjects.
+
+### Groups
+
+What the principal gets as a member of a group is listed with the group, and
+the first line names the groups it is in:
+
+```console
+$ rbac what-can --principal User:alice
+User:alice is in Group:audit, Group:payments.
+User:alice may:
+  topics with prefix billing.             Read, Describe   by binding DeveloperRead to Group:payments on prefix billing., as a member of Group:payments
+  groups with prefix billing.             Read, Describe   by binding DeveloperRead to Group:payments on prefix billing., as a member of Group:payments
+  transactional IDs with prefix billing.  Describe         by binding DeveloperRead to Group:payments on prefix billing., as a member of Group:payments
+  topic orders                            Write, Describe  by ACL allow User:alice Write on topic orders
+  topic reports                           Read, Describe   by ACL allow Group:audit Read on topic reports, as a member of Group:audit
+but not, whatever allows it:
+  topic billing.secret  Read  by ACL deny User:alice Read on topic billing.secret
+
+Not counted: what the brokers' own settings allow (super.users, allow.everyone.if.no.acl.found).
+```
+
+Asked about a group, it lists the members and what the group gives them:
+
+```console
+$ rbac what-can --principal Group:audit
+Group:audit has the members User:alice, User:dave.
+A member of Group:audit may:
+  topic reports  Read, Describe  by ACL allow Group:audit Read on topic reports
+
+Not counted: what the brokers' own settings allow (super.users, allow.everyone.if.no.acl.found).
+```
+
+A `DENY` ACL whose principal is a group cannot be created
+([groups.md](groups.md), "Denying"). Where one is in the metadata all the
+same, a warning on standard error names it, `who-can` names it as the reason
+for the members it stops, and `what-can` lists it apart, under `and not by a
+role or a group, only by an ACL that names User:alice`: it takes away what
+roles and groups give, and nothing an ACL allows the principal by name.
 
 A principal no record names may do nothing:
 
@@ -322,9 +477,11 @@ $ echo $?
 
 ## Who may run it
 
-The cluster decides, as it does for the ACL tool. `list`, `who-can` and
-`what-can` list the ACLs: whoever may describe the cluster, and a
-`ResourceOwner`. `bind` and `unbind` create and delete one ACL record: a
-principal the ACLs allow to alter the cluster and a `SystemAdmin` any
+The cluster decides, as it does for the ACL tool. `list`, `who-can`,
+`what-can` and `group list` list the ACLs: whoever may describe the cluster,
+and a `ResourceOwner`. `bind` and `unbind` create and delete one ACL record:
+a principal the ACLs allow to alter the cluster and a `SystemAdmin` any
 binding, a `ResourceOwner` bindings inside what it owns, everyone else
-none. A refusal comes back with its reason.
+none. `group add` and `group remove` create and delete one membership
+record: a principal the ACLs allow to alter the cluster and a `SystemAdmin`,
+and nobody else. A refusal comes back with its reason.

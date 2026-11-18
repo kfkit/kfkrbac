@@ -6,17 +6,34 @@ role can be bound to a group instead of to every user in it, and an ordinary
 lives in the cluster's metadata, next to the ACLs and the bindings: there is
 no directory to connect and nothing else to run.
 
-> Status: the authorizer reads membership records and decides with them in
-> unit tests against the real `StandardAuthorizer`; groups have not run on a
-> broker yet. The extension for Kafka Connect reads the same records and
-> applies a role bound to a group to its members, in real workers too
-> ([connect.md](connect.md)). The command that makes the examples shorter
-> does not exist.
+> Status: the authorizer reads membership records and decides with them, in
+> unit tests against the real `StandardAuthorizer` and on real brokers of
+> every supported release in the integration suite. The command has the
+> verbs `group add`, `group remove` and `group list`, and names the members
+> of groups in `who-can` and `what-can` ([command.md](command.md)). The
+> extension for Kafka Connect reads the same records and applies a role
+> bound to a group to its members, in real workers too
+> ([connect.md](connect.md)).
 
 ## Putting a user in a group
 
-A membership is an ACL record whose principal is `Member:<member>`, on the
-literal topic name `Group:<name>`, with the operation `All`:
+With the command ([command.md](command.md); `rbac` stands for
+`kafka-run-class.sh dev.kfkit.kfkrbac.RbacCommand` and the options of the
+connection):
+
+```console
+$ rbac group add --group payments --member User:alice
+Added User:alice to Group:payments
+$ rbac group list
+GROUP     MEMBER
+payments  User:alice
+$ rbac group remove --group payments --member User:alice
+Removed User:alice from Group:payments
+```
+
+What it writes is a membership: an ACL record whose principal is
+`Member:<member>`, on the literal topic name `Group:<name>`, with the
+operation `All`. The ACL tool writes the same record:
 
 ```bash
 kafka-acls.sh --bootstrap-server localhost:9092 --add \
@@ -39,6 +56,13 @@ in a topic name, so the record never stands for a topic.
 ## A role for a group
 
 The member of a binding can be a group:
+
+```console
+$ rbac bind --role DeveloperRead --member Group:payments --prefix billing.
+Bound DeveloperRead to Group:payments on prefix billing.
+```
+
+or, with the ACL tool:
 
 ```bash
 kafka-acls.sh --bootstrap-server localhost:9092 --add \
@@ -69,6 +93,22 @@ is given to many users at once.
 
 Like a role, an ACL of a group only adds access, and only where the ACLs
 that name the user did not already decide.
+
+## Who is allowed through a group
+
+`who-can` names the members of a group for what the group is given, with the
+group, and `what-can` lists what a principal gets through each of its groups
+([command.md](command.md)):
+
+```console
+$ rbac who-can --operation Read --topic reports
+Read on topic reports:
+
+User:alice  allowed
+    allowed by ACL allow Group:payments Read on topic reports, as a member of Group:payments
+
+Not counted: what the brokers' own settings allow (super.users, allow.everyone.if.no.acl.found).
+```
 
 ## Denying
 
