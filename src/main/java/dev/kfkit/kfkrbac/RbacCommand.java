@@ -21,6 +21,7 @@ import java.io.PrintStream;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -43,8 +44,9 @@ import org.apache.kafka.common.resource.ResourceType;
 import org.apache.kafka.common.security.auth.KafkaPrincipal;
 
 /**
- * The command: role bindings and groups in an operator's own terms, and the
- * answer to "who can do this" and "what may this principal do".
+ * The command: role bindings and groups in an operator's own terms, the
+ * answer to "who can do this" and "what may this principal do", and
+ * bindings kept in a file or brought over from one.
  *
  * <p>Run it with the distribution's
  * {@code kafka-run-class.sh dev.kfkit.kfkrbac.RbacCommand <verb> ...}, with
@@ -55,7 +57,8 @@ import org.apache.kafka.common.security.auth.KafkaPrincipal;
  * with the ACL tool: it is a convenience, never the only way.
  *
  * <p>Exit status: 0 when done, 1 when the cluster refused or the call
- * failed, 2 for wrong usage.
+ * failed, 2 for wrong usage and for a file that cannot be read as what it
+ * must be.
  */
 public final class RbacCommand {
 
@@ -213,6 +216,46 @@ public final class RbacCommand {
                         "  --host <address>           the address the request comes from, for ACLs that name a",
                         "                             host; by default an address no ACL names");
             }
+        },
+        APPLY("apply", "make the bindings and the groups of the cluster those of a file",
+                Set.of("--file"), Set.of("--dry-run", "--no-delete"),
+                "--file <file> [--dry-run] [--no-delete]") {
+            @Override
+            String explanation() {
+                return String.join(System.lineSeparator(),
+                        "Compares a file of bindings and groups with the cluster, prints the difference and makes",
+                        "the cluster match: creates what is in the file and not in the cluster, and deletes the",
+                        "bindings and the memberships that are in the cluster and not in the file. Ordinary ACLs",
+                        "are never touched.",
+                        "",
+                        "  --file <file>              JSON: {\"bindings\": [...], \"groups\": [...]}, where bindings",
+                        "                             is what list --output json prints and groups what group list",
+                        "                             --output json prints; or the array of list --output json",
+                        "                             alone. Bindings or groups that the file does not have at all",
+                        "                             are left as they are",
+                        "  --dry-run                  print the difference and change nothing",
+                        "  --no-delete                only create: delete nothing");
+            }
+        },
+        IMPORT("import", "write the bindings of a file that has another shape",
+                Set.of("--file", "--format", "--cluster-id"), Set.of("--dry-run"),
+                "--file <file> --format role-bindings|role-acls [--cluster-id <id>] [--dry-run]") {
+            @Override
+            String explanation() {
+                return String.join(System.lineSeparator(),
+                        "Reads a file in one of two shapes and writes what it holds; the fields of both are in",
+                        "docs/import.md. What cannot be written as the file has it is skipped and reported, never",
+                        "guessed. Writing what is there already changes nothing.",
+                        "",
+                        "  --file <file>              the JSON file",
+                        "  --format role-bindings     a list of bindings of named roles: written as bindings",
+                        "  --format role-acls         a list of roles that are sets of ACLs: each is written as a",
+                        "                             group with the role's members and ALLOW ACLs of the group",
+                        "  --cluster-id <id>          for role-bindings: only the bindings for that Kafka cluster,",
+                        "                             and those that name none",
+                        "  --dry-run                  print what would be written and what is skipped, and change",
+                        "                             nothing");
+            }
         };
 
         final String word;
@@ -272,7 +315,7 @@ public final class RbacCommand {
     }
 
     /** What a verb does once its options are understood and the cluster is reached. */
-    private interface Task {
+    interface Task {
         int run(AclRecords records, PrintStream out, PrintStream err);
     }
 
@@ -342,6 +385,10 @@ public final class RbacCommand {
             err.println();
             err.print(verb.usage());
             return WRONG_USAGE;
+        } catch (Json.Invalid e) {
+            // The file says where it is wrong; how the verb is used is not what is wrong.
+            err.println("error: " + e.getMessage());
+            return WRONG_USAGE;
         }
         try (AclRecords records = cluster.apply(properties)) {
             return task.run(records, out, err);
@@ -358,7 +405,9 @@ public final class RbacCommand {
     /** Every verb and every option. */
     static String help() {
         StringBuilder help = new StringBuilder(
-                "Role bindings for Apache Kafka: bind and list them, manage groups, and ask who can do what.")
+                "Role bindings for Apache Kafka: bind and list them, manage groups, ask who can do what, and")
+                .append(System.lineSeparator())
+                .append("keep bindings in a file or bring them over from one.")
                 .append(System.lineSeparator()).append(System.lineSeparator())
                 .append("Usage: ").append(RUN).append(" <verb> --bootstrap-server <host:port> [options]")
                 .append(System.lineSeparator()).append(System.lineSeparator())
@@ -367,7 +416,9 @@ public final class RbacCommand {
             help.append(String.format("  %-13s %s%n", verb.word, verb.summary));
         }
         help.append(System.lineSeparator())
-                .append("Exit status: 0 done, 1 refused by the cluster or failed, 2 wrong usage.")
+                .append("Exit status: 0 done, 1 refused by the cluster or failed, 2 wrong usage or a file that")
+                .append(System.lineSeparator())
+                .append("cannot be read as what it must be.")
                 .append(System.lineSeparator());
         for (Verb verb : Verb.values()) {
             help.append(System.lineSeparator()).append(verb.usage());
@@ -375,7 +426,7 @@ public final class RbacCommand {
         return help.toString();
     }
 
-    private static Task task(Verb verb, Arguments arguments) throws Arguments.WrongUsage {
+    private static Task task(Verb verb, Arguments arguments) throws Arguments.WrongUsage, Json.Invalid {
         switch (verb) {
             case BIND:
                 return bind(arguments);
@@ -391,8 +442,12 @@ public final class RbacCommand {
                 return groupList(arguments);
             case WHO_CAN:
                 return whoCan(arguments);
-            default:
+            case WHAT_CAN:
                 return whatCan(arguments);
+            case APPLY:
+                return apply(arguments);
+            default:
+                return importFrom(arguments);
         }
     }
 
@@ -785,6 +840,52 @@ public final class RbacCommand {
         }
     }
 
+    // --- apply, import ---------------------------------------------------------
+
+    private static Task apply(Arguments arguments) throws Arguments.WrongUsage, Json.Invalid {
+        Path file = file(arguments);
+        boolean dryRun = arguments.has("--dry-run");
+        boolean noDelete = arguments.has("--no-delete");
+        Apply.Wanted wanted = Apply.read(file);
+        return (records, out, err) -> Apply.run(wanted, dryRun, noDelete, records, out, err);
+    }
+
+    private static Task importFrom(Arguments arguments) throws Arguments.WrongUsage, Json.Invalid {
+        Path file = file(arguments);
+        String format = arguments.required("--format");
+        String clusterId = arguments.value("--cluster-id").orElse(null);
+        boolean dryRun = arguments.has("--dry-run");
+        Import.Plan plan;
+        switch (format) {
+            case "role-bindings":
+                plan = Import.roleBindings(file, clusterId);
+                break;
+            case "role-acls":
+                if (clusterId != null) {
+                    throw new Arguments.WrongUsage("--cluster-id selects among the bindings of --format role-bindings");
+                }
+                plan = Import.roleAcls(file);
+                break;
+            default:
+                throw new Arguments.WrongUsage("--format is role-bindings or role-acls, not " + format);
+        }
+        return (records, out, err) -> Import.run(plan, dryRun, records, out);
+    }
+
+    /**
+     * The file a verb reads. Asked for after the cluster to connect to, so
+     * that a command without one says so before anything is read.
+     */
+    private static Path file(Arguments arguments) throws Arguments.WrongUsage {
+        String file = arguments.required("--file");
+        arguments.required(BOOTSTRAP_SERVER);
+        try {
+            return Path.of(file);
+        } catch (InvalidPathException e) {
+            throw new Arguments.WrongUsage("--file is not the path of a file: " + file);
+        }
+    }
+
     // --- shared ----------------------------------------------------------------
 
     /** Whether {@code --output} asks for JSON. */
@@ -810,7 +911,7 @@ public final class RbacCommand {
      * that is said: it is easy to take for one. So it is of a record that
      * is not a group membership, and of a deny ACL of a group.
      */
-    private static List<AclBinding> everyRecord(AclRecords records, PrintStream err) {
+    static List<AclBinding> everyRecord(AclRecords records, PrintStream err) {
         List<AclBinding> all = new ArrayList<>(records.describe(AclBindingFilter.ANY));
         all.sort(BindingRecords.ORDER);
         for (AclBinding record : all) {

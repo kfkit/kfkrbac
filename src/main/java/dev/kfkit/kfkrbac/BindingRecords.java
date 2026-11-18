@@ -87,6 +87,22 @@ final class BindingRecords {
     }
 
     /**
+     * The record of a binding from the fields {@code list --output json}
+     * prints: the record as it is, with nothing to work out.
+     *
+     * @param role the role's name
+     * @param member who holds it, as it is written: {@code User:alice}
+     * @param resourceType the resource type of the record
+     * @param name the name of the record, with {@code Subject:} or {@code Connector:} in front where it has one
+     * @param patternType the pattern type of the record
+     */
+    static AclBinding record(String role, String member, ResourceType resourceType, String name,
+            PatternType patternType) {
+        return new AclBinding(new ResourcePattern(resourceType, name, patternType),
+                new AccessControlEntry(role + ":" + member, "*", AclOperation.ALL, AclPermissionType.ALLOW));
+    }
+
+    /**
      * The record of a membership: the member is in the group.
      *
      * @param group the name of the group, without {@code Group:} in front: {@code payments}

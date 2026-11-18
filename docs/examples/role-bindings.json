@@ -1,0 +1,51 @@
+[
+  {
+    "principal": "User:alice",
+    "role": "DeveloperRead",
+    "resourcePatterns": [
+      {"resourceType": "Topic", "name": "billing.", "patternType": "PREFIXED"},
+      {"resourceType": "Group", "name": "billing.", "patternType": "PREFIXED"}
+    ],
+    "scope": {"clusters": {"kafka-cluster": "cluster-1"}}
+  },
+  {
+    "principal": "Group:payments",
+    "role": "DeveloperWrite",
+    "resourcePatterns": [
+      {"resourceType": "Topic", "name": "orders", "patternType": "LITERAL"},
+      {"resourceType": "TransactionalId", "name": "billing-1", "patternType": "LITERAL"}
+    ],
+    "scope": {"clusters": {"kafka-cluster": "cluster-1"}}
+  },
+  {
+    "principal": "User:bob",
+    "role": "ResourceOwner",
+    "resourcePatterns": [
+      {"resourceType": "Topic", "name": "billing.", "patternType": "PREFIXED"},
+      {"resourceType": "Subject", "name": "billing.", "patternType": "PREFIXED"},
+      {"resourceType": "Dashboard", "name": "billing.", "patternType": "PREFIXED"}
+    ],
+    "scope": {"clusters": {"kafka-cluster": "cluster-1"}}
+  },
+  {
+    "principal": "User:carol",
+    "role": "ClusterAdmin",
+    "scope": {"clusters": {"kafka-cluster": "cluster-1"}}
+  },
+  {
+    "principal": "User:dave",
+    "role": "Auditor",
+    "resourcePatterns": [
+      {"resourceType": "Topic", "name": "billing.", "patternType": "PREFIXED"}
+    ],
+    "scope": {"clusters": {"kafka-cluster": "cluster-1"}}
+  },
+  {
+    "principal": "User:erin",
+    "role": "DeveloperRead",
+    "resourcePatterns": [
+      {"resourceType": "Topic", "name": "orders", "patternType": "LITERAL"}
+    ],
+    "scope": {"clusters": {"kafka-cluster": "cluster-2"}}
+  }
+]

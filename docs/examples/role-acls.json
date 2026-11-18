@@ -1,0 +1,18 @@
+[
+  {
+    "name": "orders-readers",
+    "members": ["User:alice", "User:bob"],
+    "acls": [
+      {"resourceType": "TOPIC", "resourceName": "orders", "patternType": "LITERAL", "operation": "READ", "permission": "ALLOW", "host": "*"},
+      {"resourceType": "GROUP", "resourceName": "orders-", "patternType": "PREFIXED", "operation": "READ", "permission": "ALLOW", "host": "*"}
+    ]
+  },
+  {
+    "name": "billing-writers",
+    "members": ["User:carol"],
+    "acls": [
+      {"resourceType": "TOPIC", "resourceName": "billing.", "patternType": "PREFIXED", "operation": "WRITE", "permission": "ALLOW", "host": "*"},
+      {"resourceType": "TOPIC", "resourceName": "billing.audit", "patternType": "LITERAL", "operation": "WRITE", "permission": "DENY", "host": "*"}
+    ]
+  }
+]

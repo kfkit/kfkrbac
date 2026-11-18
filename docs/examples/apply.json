@@ -1,0 +1,10 @@
+{
+  "bindings": [
+    {"role":"DeveloperRead","member":"Group:payments","resourceType":"TOPIC","name":"billing.","patternType":"PREFIXED"},
+    {"role":"DeveloperWrite","member":"User:bob","resourceType":"TOPIC","name":"orders","patternType":"LITERAL"},
+    {"role":"ClusterAdmin","member":"User:carol","resourceType":"CLUSTER","name":"kafka-cluster","patternType":"LITERAL"}
+  ],
+  "groups": [
+    {"group":"payments","member":"User:alice"}
+  ]
+}
