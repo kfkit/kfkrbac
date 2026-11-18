@@ -151,10 +151,10 @@ class DelegationTest {
     // --- creating -------------------------------------------------------------------
 
     @Test
-    void aSuperUserAndASystemAdminCreateAnythingWellFormed() {
+    void whoeverTheAclsAllowAndASystemAdminCreateAnythingWellFormed() {
         List<AclBinding> records = List.of(ALICE_READS_BILLING, BOB_READS_ORDERS, ALICE_IN_PAYMENTS,
                 ALICE_ADMINISTERS);
-        for (Delegation.Caller caller : List.of(superUser(), holding(systemAdmin()))) {
+        for (Delegation.Caller caller : List.of(allowedByTheAcls(), holding(systemAdmin()))) {
             Delegation.Decision decision = Delegation.create(caller, records);
 
             assertTrue(decision.allowed());
@@ -165,7 +165,7 @@ class DelegationTest {
 
     @Test
     void aMalformedBindingIsRefusedWhoeverAsks() {
-        for (Delegation.Caller caller : List.of(superUser(), holding(systemAdmin()), holding(OWNS_BILLING),
+        for (Delegation.Caller caller : List.of(allowedByTheAcls(), holding(systemAdmin()), holding(OWNS_BILLING),
                 holding())) {
             Delegation.Decision decision = Delegation.create(caller, List.of(NOT_A_BINDING));
 
@@ -263,8 +263,8 @@ class DelegationTest {
     // --- deleting -------------------------------------------------------------------
 
     @Test
-    void aSuperUserAndASystemAdminDeleteWhateverTheirFiltersMatch() {
-        for (Delegation.Caller caller : List.of(superUser(), holding(systemAdmin()))) {
+    void whoeverTheAclsAllowAndASystemAdminDeleteWhateverTheirFiltersMatch() {
+        for (Delegation.Caller caller : List.of(allowedByTheAcls(), holding(systemAdmin()))) {
             assertTrue(Delegation.delete(caller, List.of(List.of(ALICE_READS_BILLING, BOB_READS_ORDERS,
                     ALICE_IN_PAYMENTS, ALICE_ADMINISTERS, NOT_A_BINDING), List.of())).allowed());
         }
@@ -299,7 +299,8 @@ class DelegationTest {
         for (AclBinding record : List.of(BOB_READS_ORDERS, ALICE_IN_PAYMENTS, ALICE_ADMINISTERS, NOT_A_BINDING)) {
             String reason = onlyRefusal(Delegation.delete(owner, List.of(List.of(record))));
             assertTrue(reason.startsWith("User:carol may not delete "), reason);
-            assertTrue(reason.contains("a super user or a SystemAdmin"), reason);
+            assertTrue(reason.endsWith("a principal that the ACLs allow ALTER on the cluster, as they do a super"
+                    + " user, or a SystemAdmin"), reason);
         }
     }
 
@@ -317,7 +318,8 @@ class DelegationTest {
 
     // --- helpers --------------------------------------------------------------------
 
-    private static Delegation.Caller superUser() {
+    /** Carol as a super user is, or as an ACL that allows her {@code ALTER} on the cluster makes her. */
+    private static Delegation.Caller allowedByTheAcls() {
         return new Delegation.Caller(CAROL, true, List.of());
     }
 

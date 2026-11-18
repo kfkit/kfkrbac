@@ -35,9 +35,11 @@ import org.apache.kafka.common.security.auth.KafkaPrincipal;
  * <ul>
  * <li>A record whose principal type is a role must be a well-formed binding
  * to be created, whoever asks.
- * <li>A super user, or a principal that holds {@code SystemAdmin}, creates
- * any well-formed binding, any membership record and any ordinary ACL, and
- * deletes any record.
+ * <li>A principal that the ACLs alone allow {@code ALTER} on the cluster,
+ * which a super user is, or one that holds {@code SystemAdmin}, creates any
+ * well-formed binding, any membership record and any ordinary ACL, and
+ * deletes any record. The first could before there were roles, and ACLs
+ * mean what they meant.
  * <li>A principal that holds {@code ResourceOwner} creates and deletes
  * bindings of the roles that are bound to a name pattern, on patterns one of
  * its own {@code ResourceOwner} bindings {@linkplain #covers covers}, and
@@ -57,6 +59,10 @@ final class Delegation {
 
     private static final Answer ALLOWED = new Answer(Outcome.ALLOWED, "allowed");
 
+    /** Who creates and deletes any record, as a reason names them. */
+    private static final String WHOEVER_MANAGES_EVERYTHING =
+            "a principal that the ACLs allow ALTER on the cluster, as they do a super user, or a SystemAdmin";
+
     private Delegation() {
     }
 
@@ -64,19 +70,24 @@ final class Delegation {
      * Who asks.
      *
      * @param principal the principal of the request
-     * @param superUser whether it is in {@code super.users}
+     * @param allowedByAcls whether the ACLs alone, without any role, allow
+     *        it {@code ALTER} on the cluster: it is in {@code super.users},
+     *        or an ACL allows it and none denies it
      * @param held every binding that applies to it, its groups' included
      */
-    record Caller(KafkaPrincipal principal, boolean superUser, List<RoleBinding> held) {
+    record Caller(KafkaPrincipal principal, boolean allowedByAcls, List<RoleBinding> held) {
 
         Caller {
             Objects.requireNonNull(principal, "principal");
             held = List.copyOf(held);
         }
 
-        /** Whether it may create and delete any record: a super user, or a holder of {@code SystemAdmin}. */
+        /**
+         * Whether it may create and delete any record: the ACLs allow it
+         * {@code ALTER} on the cluster, or it holds {@code SystemAdmin}.
+         */
         boolean managesEverything() {
-            if (superUser) {
+            if (allowedByAcls) {
                 return true;
             }
             for (RoleBinding binding : held) {
@@ -267,19 +278,19 @@ final class Delegation {
             return whyNobody(caller);
         }
         if (record instanceof BindingCodec.Membership) {
-            return "a record of group membership is managed by a super user or a SystemAdmin only";
+            return "a record of group membership is managed only by " + WHOEVER_MANAGES_EVERYTHING;
         }
         if (record instanceof BindingCodec.Malformed malformed) {
             return "it is not a role binding (" + malformed.reason()
-                    + "), and such a record is deleted by a super user or a SystemAdmin only";
+                    + "), and such a record is deleted only by " + WHOEVER_MANAGES_EVERYTHING;
         }
         if (!(record instanceof RoleBinding wanted)) {
-            return "it is an ordinary ACL, and a ResourceOwner manages role bindings only: ordinary ACLs take a"
-                    + " super user or a SystemAdmin";
+            return "it is an ordinary ACL, and a ResourceOwner manages role bindings only: an ordinary ACL takes "
+                    + WHOEVER_MANAGES_EVERYTHING;
         }
         if (wanted.target() == RoleBinding.Target.CLUSTER) {
-            return wanted.role() + " is bound to the cluster, and a binding to the cluster is managed by a super"
-                    + " user or a SystemAdmin only";
+            return wanted.role() + " is bound to the cluster, and a binding to the cluster is managed only by "
+                    + WHOEVER_MANAGES_EVERYTHING;
         }
         for (RoleBinding owner : owned) {
             if (covers(owner, wanted)) {
@@ -291,8 +302,9 @@ final class Delegation {
     }
 
     private static String whyNobody(Caller caller) {
-        return "that takes a super user, a SystemAdmin, or a ResourceOwner of a pattern that covers the record, and "
-                + caller.principal() + " is none of them";
+        return "that takes " + WHOEVER_MANAGES_EVERYTHING
+                + ", or a ResourceOwner of a pattern that covers the record, and " + caller.principal()
+                + " is none of them";
     }
 
     /** The answers as they are, or, when one refuses, with every other one refused for that. */

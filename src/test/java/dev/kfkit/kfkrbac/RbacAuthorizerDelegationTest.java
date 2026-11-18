@@ -81,8 +81,10 @@ import org.junit.jupiter.params.provider.MethodSource;
  * where the controller would be.
  *
  * <p>{@code User:admin} is the super user, {@code User:erin} holds
- * {@code SystemAdmin}, {@code User:carol} holds {@code ResourceOwner} on the
- * prefix {@code billing.} and {@code User:bob} holds nothing.
+ * {@code SystemAdmin}, {@code User:frank} holds {@code ClusterAdmin},
+ * {@code User:carol} holds {@code ResourceOwner} on the prefix
+ * {@code billing.}, an ordinary ACL allows {@code User:grace} {@code ALTER}
+ * on the cluster, and {@code User:bob} holds nothing.
  */
 class RbacAuthorizerDelegationTest {
 
@@ -92,6 +94,8 @@ class RbacAuthorizerDelegationTest {
 
     private static final StandardAcl ERIN_ADMINISTERS = record(binding("SystemAdmin:User:erin", THE_CLUSTER));
     private static final StandardAcl CAROL_OWNS_BILLING = record(binding("ResourceOwner:User:carol", BILLING));
+    private static final StandardAcl FRANK_RUNS_THE_CLUSTER = record(binding("ClusterAdmin:User:frank", THE_CLUSTER));
+    private static final StandardAcl GRACE_ALTERS_THE_CLUSTER = allow("User:grace", THE_CLUSTER, ALTER);
 
     private static final AclBinding ALICE_READS_BILLING = binding("DeveloperRead:User:alice", BILLING);
     private static final AclBinding ALICE_READS_PAYMENTS = binding("DeveloperRead:User:alice", PAYMENTS);
@@ -155,11 +159,10 @@ class RbacAuthorizerDelegationTest {
 
     @Test
     void whoeverHoldsNeitherRoleCreatesNothing() {
-        start(record(binding("DeveloperRead:User:bob", BILLING)),
-                record(binding("ClusterAdmin:User:frank", THE_CLUSTER)),
-                allow("User:grace", THE_CLUSTER, ALTER));
+        start(record(binding("DeveloperRead:User:bob", BILLING)), FRANK_RUNS_THE_CLUSTER,
+                allow("User:heidi", THE_CLUSTER, DESCRIBE), allow("User:heidi", literal(TOPIC, "*"), ALTER));
 
-        for (String user : List.of("bob", "frank", "grace", "nobody")) {
+        for (String user : List.of("bob", "frank", "heidi", "nobody")) {
             for (AclBinding record : List.of(ALICE_READS_BILLING, BOB_READS_ORDERS)) {
                 ApiException refused = refused(create(user, record), 0);
                 assertInstanceOf(ClusterAuthorizationException.class, refused);
@@ -171,7 +174,7 @@ class RbacAuthorizerDelegationTest {
     }
 
     @Test
-    void aSuperUserIsReadFromTheConfigurationAsTheParentReadsIt() {
+    void aSuperUserIsWhoeverTheParentTakesForOne() {
         metrics = new Metrics();
         authorizer = new RbacAuthorizer();
         authorizer.configure(Map.of(StandardAuthorizer.SUPER_USERS_CONFIG, " User:admin ;; User:root;"));
@@ -188,6 +191,82 @@ class RbacAuthorizerDelegationTest {
         refused(create("User:admin", BOB_READS_ORDERS), 0);
     }
 
+    // --- ACLs stay: whoever the ACLs alone allow ALTER on the cluster creates and deletes anything -----
+
+    @Test
+    void aPrincipalAnAclAllowsAlterOnTheClusterCreatesAndDeletesAnything() {
+        start(GRACE_ALTERS_THE_CLUSTER);
+        List<AclBinding> records = List.of(BOB_READS_ORDERS, ALICE_READS_BILLING, ALICE_ADMINISTERS,
+                ALICE_IN_PAYMENTS);
+        assertEquals(ALLOWED, gate("grace", ALTER, ApiKeys.CREATE_ACLS));
+        assertEquals(ALLOWED, gate("grace", ALTER, ApiKeys.DELETE_ACLS));
+
+        assertCreated(create("grace", records.toArray(new AclBinding[0])), 4);
+        assertEquals(records, mutator.created);
+
+        AclBindingFilter[] filters = records.stream().map(AclBinding::toFilter).toArray(AclBindingFilter[]::new);
+        List<AclDeleteResult> results = delete("grace", filters);
+        for (int i = 0; i < records.size(); i++) {
+            assertEquals(List.of(records.get(i)), deleted(results, i));
+        }
+        // The filters go to the controller as they were sent, as a super user's do.
+        assertEquals(List.of(filters), mutator.deleted);
+        assertEquals(List.of(GRACE_ALTERS_THE_CLUSTER.toBinding()), mutator.records());
+    }
+
+    @Test
+    void anAclForEveryoneOrForEveryOperationOnTheClusterAllowsTheSame() {
+        start(allow("User:*", THE_CLUSTER, ALL), record(BOB_READS_ORDERS));
+
+        assertCreated(create("nobody", ALICE_ADMINISTERS, ALICE_IN_PAYMENTS), 2);
+        assertEquals(List.of(BOB_READS_ORDERS), deleted(delete("nobody", BOB_READS_ORDERS.toFilter()), 0));
+    }
+
+    @Test
+    void anAclThatAllowsSomethingElseIsNotEnough() {
+        start(allow("User:heidi", THE_CLUSTER, DESCRIBE), allow("User:heidi", literal(TOPIC, "*"), ALL),
+                allow("User:heidi", literal(CLUSTER, "billing."), ALTER), record(BOB_READS_ORDERS));
+
+        assertEquals(DENIED, gate("heidi", ALTER, ApiKeys.CREATE_ACLS));
+        refused(create("heidi", ALICE_READS_BILLING), 0);
+        refused(delete("heidi", BOB_READS_ORDERS.toFilter()).get(0));
+        assertEquals(List.of(), mutator.created);
+        assertEquals(List.of(), mutator.deleted);
+    }
+
+    @Test
+    void aDenyAclOnTheClusterClosesTheGateToAPrincipalAnAclAllowsAndItManagesNothing() {
+        start(GRACE_ALTERS_THE_CLUSTER, deny("User:grace", THE_CLUSTER, ALTER, "*"), record(BOB_READS_ORDERS));
+
+        assertEquals(DENIED, gate("grace", ALTER, ApiKeys.CREATE_ACLS));
+        assertEquals(DENIED, gate("grace", ALTER, ApiKeys.DELETE_ACLS));
+        assertTrue(refused(create("grace", ALICE_READS_BILLING), 0).getMessage()
+                .startsWith("User:grace may not create "));
+        assertTrue(refused(delete("grace", BOB_READS_ORDERS.toFilter()).get(0)).getMessage()
+                .startsWith("User:grace may not delete "));
+        assertEquals(List.of(), mutator.created);
+        assertEquals(List.of(), mutator.deleted);
+    }
+
+    @Test
+    void aClusterAdminPassesTheGateByItsRoleAndIsRefusedWithAReason() {
+        start(FRANK_RUNS_THE_CLUSTER, record(BOB_READS_ORDERS));
+        assertEquals(ALLOWED, gate("frank", ALTER, ApiKeys.CREATE_ACLS));
+        assertEquals(ALLOWED, gate("frank", ALTER, ApiKeys.DELETE_ACLS));
+
+        for (AclBinding record : List.of(BOB_READS_ORDERS, ALICE_READS_BILLING, ALICE_ADMINISTERS,
+                ALICE_IN_PAYMENTS)) {
+            ApiException refused = refused(create("frank", record), 0);
+            assertInstanceOf(ClusterAuthorizationException.class, refused);
+            assertTrue(refused.getMessage().startsWith("User:frank may not create "), refused.getMessage());
+            assertTrue(refused.getMessage().endsWith("User:frank is none of them"), refused.getMessage());
+        }
+        ApiException refused = refused(delete("frank", BOB_READS_ORDERS.toFilter()).get(0));
+        assertTrue(refused.getMessage().startsWith("User:frank may not delete "), refused.getMessage());
+        assertEquals(List.of(), mutator.created);
+        assertEquals(List.of(), mutator.deleted);
+    }
+
     // --- AC2: a malformed binding is refused, whoever asks ----------------------------------
 
     /** The malformed shapes the codec knows, but the one no request can carry: a pattern of type MATCH is a filter. */
@@ -199,10 +278,10 @@ class RbacAuthorizerDelegationTest {
     @ParameterizedTest(name = "{0}")
     @MethodSource("malformedBindings")
     void aMalformedBindingIsRefusedForASuperUserToo(String shape, StandardAcl record) {
-        start(ERIN_ADMINISTERS, CAROL_OWNS_BILLING);
+        start(ERIN_ADMINISTERS, CAROL_OWNS_BILLING, GRACE_ALTERS_THE_CLUSTER);
         String wrong = assertInstanceOf(BindingCodec.Malformed.class, BindingCodec.decode(record)).reason();
 
-        for (String user : List.of("admin", "erin", "carol", "bob")) {
+        for (String user : List.of("admin", "grace", "erin", "carol", "bob")) {
             ApiException refused = refused(create(user, record.toBinding()), 0);
 
             assertInstanceOf(InvalidRequestException.class, refused, user);

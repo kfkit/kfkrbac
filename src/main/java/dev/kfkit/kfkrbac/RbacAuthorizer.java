@@ -136,9 +136,6 @@ public class RbacAuthorizer extends StandardAuthorizer {
     /** The private authorizer's own metrics; never reported. */
     private final Metrics denyMetrics = new Metrics();
 
-    /** The principals of {@code super.users}, as the parent reads them and compares them. */
-    private volatile Set<String> superUsers = Set.of();
-
     public RbacAuthorizer() {
         this(new BindingIndex());
     }
@@ -162,7 +159,6 @@ public class RbacAuthorizer extends StandardAuthorizer {
     @Override
     public void configure(Map<String, ?> configs) {
         super.configure(configs);
-        superUsers = superUsers(configs);
         Map<String, Object> denyConfigs = new HashMap<>(configs);
         denyConfigs.remove(SUPER_USERS_CONFIG);
         denyConfigs.put(ALLOW_EVERYONE_IF_NO_ACL_IS_FOUND_CONFIG, "false");
@@ -314,8 +310,9 @@ public class RbacAuthorizer extends StandardAuthorizer {
      * Deletes what the filters match when the caller may delete every such
      * record, and nothing otherwise: each result then says why.
      *
-     * <p>A super user and a {@code SystemAdmin} delete what their filters
-     * match when the controller applies them. Anyone else has the filters
+     * <p>A principal that the ACLs allow {@code ALTER} on the cluster, and a
+     * {@code SystemAdmin}, delete what their filters match when the
+     * controller applies them. Anyone else has the filters
      * resolved here, against the records this node has, and deletes exactly
      * the records that were checked: a record that appears between the check
      * and the delete is not deleted with them.
@@ -448,8 +445,22 @@ public class RbacAuthorizer extends StandardAuthorizer {
     /** Who asks, with everything the rules of {@link Delegation} need to know about it. */
     private Delegation.Caller caller(AuthorizableRequestContext requestContext) {
         KafkaPrincipal principal = principal(requestContext);
-        return new Delegation.Caller(principal, superUsers.contains(principal.toString()),
+        return new Delegation.Caller(principal, aclsAllowAlteringTheCluster(requestContext),
                 bindings.heldBy(principal));
+    }
+
+    /**
+     * Whether the ACLs alone, the roles left out, allow the principal
+     * {@code ALTER} on the cluster: the parent's own answer, which is
+     * {@code ALLOWED} for a super user and for whoever an ACL allows and none
+     * denies. Such a principal created and deleted any ACL before there were
+     * roles, and still does.
+     */
+    private boolean aclsAllowAlteringTheCluster(AuthorizableRequestContext requestContext) {
+        Action quiet = new Action(AclOperation.ALTER,
+                new ResourcePattern(ResourceType.CLUSTER, Resource.CLUSTER_NAME, PatternType.LITERAL), 1, false,
+                false);
+        return super.authorize(requestContext, List.of(quiet)).get(0) == AuthorizationResult.ALLOWED;
     }
 
     /** The error a caller gets for the record, or the filter, at that position of a refused request. */
@@ -479,25 +490,6 @@ public class RbacAuthorizer extends StandardAuthorizer {
             futures.add(CompletableFuture.completedFuture(result.apply(i)));
         }
         return futures;
-    }
-
-    /**
-     * The principals of {@code super.users}, split and trimmed the way the
-     * parent does it; the parent has already refused a value it cannot read.
-     */
-    private static Set<String> superUsers(Map<String, ?> configs) {
-        Object configured = configs.get(SUPER_USERS_CONFIG);
-        if (configured == null) {
-            return Set.of();
-        }
-        Set<String> users = new HashSet<>();
-        for (String user : configured.toString().split(";")) {
-            String trimmed = user.trim();
-            if (!trimmed.isEmpty()) {
-                users.add(trimmed);
-            }
-        }
-        return Set.copyOf(users);
     }
 
     /**
