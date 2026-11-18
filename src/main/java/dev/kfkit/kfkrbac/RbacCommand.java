@@ -601,18 +601,31 @@ public final class RbacCommand {
     /**
      * Every ACL record of the cluster, in a fixed order. A record that has
      * a role as its principal type and is not a binding grants nothing, and
-     * that is said: it is easy to take for one.
+     * that is said: it is easy to take for one. So it is of a record that
+     * is not a group membership, and of a deny ACL of a group.
      */
     private static List<AclBinding> everyRecord(AclRecords records, PrintStream err) {
         List<AclBinding> all = new ArrayList<>(records.describe(AclBindingFilter.ANY));
         all.sort(BindingRecords.ORDER);
         for (AclBinding record : all) {
             if (BindingCodec.decode(record) instanceof BindingCodec.Malformed malformed) {
-                err.println("warning: not a binding, grants nothing: " + record.entry().principal() + " on "
-                        + Wording.resources(record.pattern()) + ": " + malformed.reason());
+                err.println("warning: " + notWhatItSays(malformed.kind()) + ": " + record.entry().principal()
+                        + " on " + Wording.resources(record.pattern()) + ": " + malformed.reason());
             }
         }
         return all;
+    }
+
+    /** What a record is that is not what its principal says, and what becomes of it. */
+    private static String notWhatItSays(BindingCodec.Malformed.Kind kind) {
+        switch (kind) {
+            case MEMBERSHIP:
+                return "not a group membership, puts nobody in a group";
+            case GROUP_DENY:
+                return "a DENY for a group, takes away only what roles and groups give its members";
+            default:
+                return "not a binding, grants nothing";
+        }
     }
 
     /** Prints rows in columns as wide as their widest cell; the last column is as long as it is. */
