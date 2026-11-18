@@ -6,7 +6,8 @@ One jar, one line of configuration, free and open source.
 
 > Status: pre-alpha, not released. The authorizer reads role bindings from
 > ACL records and decides with them, in unit tests against the real
-> `StandardAuthorizer`; it has not run on a broker. Who may bind what is
+> `StandardAuthorizer`, and as the authorizer of real brokers in the
+> integration tests, on Kafka 4.1 to 4.4. Who may bind what is
 > decided when an ACL record is created or deleted: whoever the ACLs allow
 > to alter the cluster, or a `SystemAdmin`, anything; a `ResourceOwner`
 > bindings inside what it owns; everyone else nothing. Groups, the
@@ -102,12 +103,15 @@ so to a broker without kfkrbac the record means nothing.
 ## Compatibility
 
 Compiled against Kafka 4.4, Java 17. Kafka 4.1 and later is the target
-(KRaft, `StandardAuthorizer`); nothing is tested on a broker yet.
+(KRaft, `StandardAuthorizer`); the integration tests run the jar on brokers
+of 4.1.2, 4.2.2, 4.3.1 and 4.4.0.
 
 ## Development
 
 ```bash
 ./gradlew check
+./gradlew integrationTest                      # the jar on real brokers; needs Docker
+./gradlew integrationTest -PbrokerVersion=4.1.2
 ./gradlew jmh      # the cost of authorize(), in build/results/jmh/
 ./gradlew publishToMavenLocal -Pversion=0.0.0-test   # jar, sources, javadoc, POM
 ```

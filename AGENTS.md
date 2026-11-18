@@ -23,6 +23,7 @@ defect, not a trade-off. The map:
 |---|---|
 | `src/main/java/dev/kfkit/kfkrbac/` | the authorizer |
 | `src/test/java/dev/kfkit/kfkrbac/` | unit tests that drive the real `StandardAuthorizer` without a broker |
+| `src/integrationTest/java/dev/kfkit/kfkrbac/` | the built jar as the authorizer of real brokers in containers; `./gradlew integrationTest` |
 
 ## Forbidden
 

@@ -9,7 +9,7 @@ permissions gets a different name. Operators do not define roles of their
 own; a group that ordinary ACLs name does that job.
 
 > Status: the authorizer reads bindings from ACL records and decides with
-> them, but it has not run on a broker yet, and nothing answers for subjects
+> them, on real brokers too in the integration tests; nothing answers yet for subjects
 > and connectors. The examples below are as designed.
 
 ## What each role grants
