@@ -37,6 +37,7 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.PartitionInfo;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.acl.AccessControlEntry;
 import org.apache.kafka.common.acl.AclBinding;
 import org.apache.kafka.common.acl.AclBindingFilter;
@@ -109,6 +110,18 @@ final class Clients {
     static AclBinding allow(String user, AclOperation operation, String topic) {
         return new AclBinding(new ResourcePattern(ResourceType.TOPIC, topic, PatternType.LITERAL),
                 new AccessControlEntry("User:" + user, "*", operation, AclPermissionType.ALLOW));
+    }
+
+    /** An ordinary ACL that allows the members of the group the operation on the topic, from that host. */
+    static AclBinding allowGroup(String group, AclOperation operation, String topic, String host) {
+        return new AclBinding(new ResourcePattern(ResourceType.TOPIC, topic, PatternType.LITERAL),
+                new AccessControlEntry("Group:" + group, host, operation, AclPermissionType.ALLOW));
+    }
+
+    /** A role binding to a group as the ACL it is: {@code DeveloperRead:Group:payments} on the prefix. */
+    static AclBinding groupBinding(String role, String group, String prefix) {
+        return new AclBinding(new ResourcePattern(ResourceType.TOPIC, prefix, PatternType.PREFIXED),
+                new AccessControlEntry(role + ":Group:" + group, "*", AclOperation.ALL, AclPermissionType.ALLOW));
     }
 
     /** An ordinary ACL that allows the user the operation on the cluster. */
@@ -292,6 +305,35 @@ final class Clients {
             while (System.nanoTime() < deadline) {
                 if (!consumer.poll(Duration.ofMillis(500)).isEmpty()) {
                     consumer.commitSync();
+                    return Answer.allowed(request);
+                }
+            }
+            throw new AssertionError(request + " was neither refused nor given a record within "
+                    + TIMEOUT.toSeconds() + " s");
+        } catch (KafkaException e) {
+            return refusal(request, e);
+        } finally {
+            consumer.close();
+        }
+    }
+
+    /**
+     * Reads the one partition of the topic from its beginning until a record
+     * arrives, in no group: what it takes is to read the topic and nothing
+     * else.
+     */
+    Answer read(String user, String topic) {
+        String request = user + " reading " + topic;
+        Map<String, Object> config = consumer(user);
+        config.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        config.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
+        KafkaConsumer<String, String> consumer =
+                new KafkaConsumer<>(config, new StringDeserializer(), new StringDeserializer());
+        try {
+            consumer.assign(List.of(new TopicPartition(topic, 0)));
+            long deadline = System.nanoTime() + TIMEOUT.toNanos();
+            while (System.nanoTime() < deadline) {
+                if (!consumer.poll(Duration.ofMillis(500)).isEmpty()) {
                     return Answer.allowed(request);
                 }
             }

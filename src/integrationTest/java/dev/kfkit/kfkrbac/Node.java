@@ -38,6 +38,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import org.testcontainers.DockerClientFactory;
+import org.testcontainers.containers.Container;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
 import org.testcontainers.containers.wait.strategy.Wait;
@@ -64,6 +65,12 @@ import org.testcontainers.utility.MountableFile;
  * <p>A node {@link #withMetrics() with metrics} publishes kfkwho's access
  * metrics and runs the JMX Exporter agent with kfkwho's own rules, as an
  * operator would to scrape them.
+ *
+ * <p>The command of the jar is run inside the container of a broker, with
+ * the script of the distribution, as an operator on the broker's host would
+ * run it: {@link #command}. It reaches the broker on the listener the
+ * brokers use among themselves, which authenticates the same users and is
+ * advertised under a name the container resolves.
  *
  * <p>Gradle passes the image ({@code -PbrokerVersion}), the jar and, for the
  * metrics, the agent, kfkwho's rules and kfkwho's own jar as system
@@ -105,6 +112,18 @@ final class Node implements AutoCloseable {
               user_%5$s="%6$s";
             };
             """.formatted(ADMIN, password(ADMIN), ALICE, password(ALICE), BOB, password(BOB));
+
+    /** The script of the distribution that runs a class with the distribution's classpath, and the jar's command. */
+    private static final String RUN_CLASS = "/opt/kafka/bin/kafka-run-class.sh";
+    private static final String COMMAND = "dev.kfkit.kfkrbac.RbacCommand";
+
+    /** What an admin client needs to authenticate as a user: the file {@code --command-config} names. */
+    private static final String COMMAND_CONFIG = """
+            security.protocol=SASL_PLAINTEXT
+            sasl.mechanism=PLAIN
+            sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required \
+              username="%1$s" password="%2$s";
+            """;
 
     /** The ports given to nodes: a port is free again the moment it was found, so it could be found twice. */
     private static final Set<Integer> PORTS_GIVEN = ConcurrentHashMap.newKeySet();
@@ -160,6 +179,9 @@ final class Node implements AutoCloseable {
                 .withNetworkAliases(alias(id))
                 .withCopyFileToContainer(file("kfkrbac.it.jar"), DIR + "kfkrbac.jar")
                 .withCopyToContainer(Transferable.of(JAAS), DIR + "jaas.conf")
+                .withCopyToContainer(Transferable.of(commandConfig(ADMIN)), commandConfigPath(ADMIN))
+                .withCopyToContainer(Transferable.of(commandConfig(ALICE)), commandConfigPath(ALICE))
+                .withCopyToContainer(Transferable.of(commandConfig(BOB)), commandConfigPath(BOB))
                 .withEnv(env)
                 .waitingFor(Wait.forLogMessage(".*" + STARTED + ".*\\n", 1).withStartupTimeout(START_TIMEOUT));
         if (broker) {
@@ -303,6 +325,46 @@ final class Node implements AutoCloseable {
         return alias(id) + ":" + INTERNAL_PORT;
     }
 
+    /**
+     * Runs the command of the jar inside the node's container, authenticated
+     * as the user, with the cluster to connect to after what is typed.
+     *
+     * @param typed the verb and its options, as an operator types them
+     */
+    Ran command(String user, String... typed) {
+        List<String> line = new ArrayList<>(List.of(typed));
+        line.add("--bootstrap-server");
+        line.add(alias(id) + ":" + INTERNAL_PORT);
+        line.add("--command-config");
+        line.add(commandConfigPath(user));
+        return commandAsTyped(line.toArray(new String[0]));
+    }
+
+    /** Runs the command of the jar inside the node's container with exactly these arguments. */
+    Ran commandAsTyped(String... args) {
+        if (port == 0) {
+            throw new IllegalStateException("node " + id + " is not a broker");
+        }
+        List<String> line = new ArrayList<>(List.of(RUN_CLASS, COMMAND));
+        line.addAll(List.of(args));
+        try {
+            Container.ExecResult result = container.execInContainer(line.toArray(new String[0]));
+            return new Ran(String.join(" ", args), result.getExitCode(), result.getStdout(), result.getStderr());
+        } catch (IOException e) {
+            throw new UncheckedIOException("running " + line + " in node " + id, e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("interrupted while running " + line + " in node " + id, e);
+        }
+    }
+
+    /** Puts a file into the node's container and returns where it is: something for the command to read. */
+    String put(String name, String content) {
+        String path = DIR + name;
+        container.copyFileToContainer(Transferable.of(content), path);
+        return path;
+    }
+
     /** What the node has logged since it was created, restarts included. */
     String log() {
         return container.getLogs();
@@ -338,6 +400,14 @@ final class Node implements AutoCloseable {
     @Override
     public void close() {
         container.stop();
+    }
+
+    private static String commandConfig(String user) {
+        return COMMAND_CONFIG.formatted(user, password(user));
+    }
+
+    private static String commandConfigPath(String user) {
+        return DIR + user + ".properties";
     }
 
     private static String alias(int id) {
