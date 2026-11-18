@@ -19,6 +19,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -41,6 +42,8 @@ import java.util.regex.Pattern;
  * &lt;!-- run: on open --&gt;           ... on the node of that name, not on the document's main one
  * &lt;!-- run: session --&gt;           ... and goes in front of every later block of the page, as in
  *                                  one shell session: where the page defines a function
+ * &lt;!-- run: within 120 s --&gt;      ... and may take that long to do what the page says, where
+ *                                  it waits for a process the page has just started
  * &lt;!-- not run: the reason --&gt;    the block that follows is not run: commands that need what a
  *                                  test does not have, or a file for a tool the tests do not run
  * &lt;!-- output --&gt;                 the text block that follows is everything the block before it prints
@@ -75,13 +78,15 @@ final class DocSteps {
      * @param node the node it runs on
      * @param session whether it also goes in front of every later block of the page
      * @param exit the exit status it must have
+     * @param within how long it may take to do what the page says, or {@code null} for the usual time
      * @param commands the block, as the page has it
      * @param output what it must print, or {@code null} when the page does not say
      */
-    record Run(int line, String node, boolean session, int exit, String commands, Output output) implements Step {
+    record Run(int line, String node, boolean session, int exit, Duration within, String commands, Output output)
+            implements Step {
 
         Run with(Output shown) {
-            return new Run(line, node, session, exit, commands, shown);
+            return new Run(line, node, session, exit, within, commands, shown);
         }
     }
 
@@ -107,6 +112,7 @@ final class DocSteps {
     private static final Pattern FENCE = Pattern.compile("^(\\s*)```\\s*([A-Za-z0-9_-]*)\\s*$");
     private static final Pattern EXIT = Pattern.compile("exit (\\d+)");
     private static final Pattern ON = Pattern.compile("on ([a-z]+)");
+    private static final Pattern WITHIN = Pattern.compile("within (\\d+) s");
 
     /** Fences a shell command could hide in without being run. */
     private static final Set<String> OTHER_SHELLS = Set.of("sh", "shell", "console", "zsh", "shell-session");
@@ -213,8 +219,10 @@ final class DocSteps {
                 return;
             }
             Matcher exit = EXIT.matcher(marker);
+            Matcher within = WITHIN.matcher(marker);
             steps.add(new Run(line, node(marker), marker.matches(".*\\bsession\\b.*"),
-                    exit.find() ? Integer.parseInt(exit.group(1)) : 0, text, null));
+                    exit.find() ? Integer.parseInt(exit.group(1)) : 0,
+                    within.find() ? Duration.ofSeconds(Long.parseLong(within.group(1))) : null, text, null));
             return;
         }
         if (marker == null) {

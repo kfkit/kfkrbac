@@ -293,9 +293,10 @@ class RbacCommandImportTest {
                 orders-readers  User:alice
                 orders-readers  User:bob
                 """, run(cluster, "group", "list").out());
-        assertEquals(documented("rbac group list"), run(cluster, "group", "list").out()
-                + "$ rbac who-can --operation Read --topic orders\n"
-                + run(cluster, "who-can", "--operation", "Read", "--topic", "orders").out(),
+        assertEquals(documented("rbac group list"), run(cluster, "group", "list").out(),
+                "what docs/import.md shows afterwards");
+        assertEquals(documented("rbac who-can --operation Read --topic orders"),
+                run(cluster, "who-can", "--operation", "Read", "--topic", "orders").out(),
                 "what docs/import.md shows afterwards");
         for (String member : List.of("alice", "bob")) {
             assertTrue(authorizerAllows(cluster.records, member, READ, literal(TOPIC, "orders")), member);
@@ -416,9 +417,9 @@ class RbacCommandImportTest {
                 "$1. Nothing was changed."), dry.out(), "the same report as the run that writes");
         assertFalse(another.records.isEmpty());
         if (command.contains("role-acls")) {
-            assertTrue(Files.readString(Path.of("docs/command.md")).contains(
-                    "$ rbac import --file docs/examples/role-acls.json --format role-acls --dry-run\n" + dry.out()
-                            + "```"), "docs/command.md shows this run");
+            assertEquals(Commands.documented(Path.of("docs/command.md"),
+                    "rbac import --file docs/examples/role-acls.json --format role-acls --dry-run"), dry.out(),
+                    "docs/command.md shows this run");
         }
     }
 
@@ -538,16 +539,9 @@ class RbacCommandImportTest {
         assertEquals(Set.of(), cluster.records);
     }
 
-    /**
-     * What {@code docs/import.md} shows as the output of a command: the
-     * lines of the console block after the line of the command.
-     */
+    /** What {@code docs/import.md} shows as the output of a command. */
     private static String documented(String command) throws IOException {
-        String page = Files.readString(Path.of("docs/import.md"));
-        int at = page.indexOf("$ " + command + "\n");
-        assertTrue(at >= 0, "docs/import.md shows `" + command + "`");
-        int from = at + command.length() + 3;
-        return page.substring(from, page.indexOf("```", from));
+        return Commands.documented(Path.of("docs/import.md"), command);
     }
 
     private Path file(String name, String content) throws IOException {

@@ -21,9 +21,16 @@ defect, not a trade-off. The map:
 
 | Path | What |
 |---|---|
-| `src/main/java/dev/kfkit/kfkrbac/` | the authorizer |
-| `src/test/java/dev/kfkit/kfkrbac/` | unit tests that drive the real `StandardAuthorizer` without a broker |
-| `src/integrationTest/java/dev/kfkit/kfkrbac/` | the built jar as the authorizer of real brokers in containers; `./gradlew integrationTest` |
+| `src/main/java/dev/kfkit/kfkrbac/` | the authorizer (`RbacAuthorizer`), the roles, the bindings and groups it reads from ACL records, the rules of delegation, the logs; the command (`RbacCommand`, with `Apply` and `Import`); what an extension outside the broker asks (`RestAccess`) |
+| `src/main/java/dev/kfkit/kfkrbac/connect/` | the REST extension for Kafka Connect |
+| `src/main/resources/META-INF/services/` | how a Connect worker finds the extension |
+| `src/test/java/dev/kfkit/kfkrbac/` | unit tests that drive the real `StandardAuthorizer`, the command and the extension's filter without a broker; the tests that hold the documents to the code (`RoleTest`, `SettingsDocTest`, `MetricsDocTest`, `DocsTest`) |
+| `src/integrationTest/java/dev/kfkit/kfkrbac/` | the built jar as the authorizer of real brokers and the extension of real Connect workers, in containers; `DocsIT` runs the shell commands of `docs/` there; `./gradlew integrationTest` |
+| `src/jmh/java/dev/kfkit/kfkrbac/` | benchmarks of `authorize` and of the log lines; `./gradlew jmh` |
+| `docs/` | operator documentation, one page for each subject; a `bash` block is run by `DocsIT` or says why not |
+| `docs/examples/` | the files the documents and the tests of `apply` and `import` read |
+| `docs/provenance/` | how to verify a released jar, and the release hashes |
+| `.github/workflows/` | `ci.yml`: the check, and the integration suite for each supported release, a cluster and the documents; `release.yml`: a signed jar from a tag |
 
 ## Forbidden
 
@@ -218,7 +225,18 @@ settled in a pull request.
 
 ## Corrections
 
-None yet.
+- **A clean merge is not a correct one.** Two branches that change the
+  same method can be merged by git without a conflict and still be wrong:
+  a rebase once moved the check of a group's ACLs outside the guard that
+  keeps SCRAM credentials for `SystemAdmin`, and no test failed. After a
+  rebase onto a branch that touched a method you touched, re-read the
+  whole method.
+- **Closing does not wait.** A test that asserts that a thread or an MBean
+  is gone waits for it, with a bound: `close()` returns before the thread
+  has ended.
+- **Changelog entries go at the end of their section.** Entries that
+  parallel branches add at the same place of `CHANGELOG.md` conflict every
+  time.
 
 ## Working an issue
 

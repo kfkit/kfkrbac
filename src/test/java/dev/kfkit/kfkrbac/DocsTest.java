@@ -33,9 +33,10 @@ import org.junit.jupiter.api.io.TempDir;
 
 /**
  * What can be checked of the README and {@code docs/} without a broker:
- * that a link to a file leads to one, and that the operator guides say of
- * every block of shell commands whether a test runs it. Running them is
- * {@code DocsIT}'s, in the integration suite.
+ * that a link to a file leads to one, that every document of {@code docs/}
+ * says of every block of shell commands whether a test runs it, and that
+ * the README shows no command of its own. Running them is {@code DocsIT}'s,
+ * in the integration suite.
  */
 class DocsTest {
 
@@ -54,9 +55,11 @@ class DocsTest {
             Pattern.compile("^\\s*<!--\\s*(run(:.*)?|not run: \\S.*?)\\s*-->\\s*$");
     private static final List<String> SHELLS = List.of("bash", "sh", "shell", "console", "zsh", "shell-session");
 
-    /** The guides whose every shell command is run by {@code DocsIT}, or says that it is not. */
-    private static final List<Path> RUN_BY_A_TEST = List.of(Path.of("docs/install.md"), Path.of("docs/bindings.md"),
-            Path.of("docs/delegation.md"));
+    private static final Pattern RUN = Pattern.compile("^\\s*<!--\\s*run(:.*)?\\s*-->\\s*$");
+
+    /** The documents that {@code DocsIT} follows: it has a test for each, and this fails when one is missing. */
+    private static final List<String> FOLLOWED = List.of("bindings", "command", "connect", "delegation", "groups",
+            "import", "install", "metrics", "roles", "troubleshooting");
 
     /** AC6 of issue 23: no link in the README or {@code docs/} points at a file that does not exist. */
     @Test
@@ -99,39 +102,114 @@ class DocsTest {
     }
 
     /**
-     * AC3 of issue 23, as far as it goes without a broker: in the guides
-     * {@code DocsIT} runs, every block of shell commands is a {@code bash}
-     * block with a comment before it that says it is run, or why not.
+     * AC3 of issue 23, as far as it goes without a broker: in every
+     * document of {@code docs/}, every block of shell commands is a
+     * {@code bash} block with a comment before it that says it is run, or
+     * why not.
      */
     @Test
-    void everyShellBlockOfTheGuidesSaysWhetherItIsRun() throws IOException {
+    void everyShellBlockOfTheDocumentsSaysWhetherItIsRun() throws IOException {
         List<String> unmarked = new ArrayList<>();
         int blocks = 0;
-        for (Path guide : RUN_BY_A_TEST) {
-            List<String> lines = Files.readAllLines(guide);
-            String before = "";
-            boolean inside = false;
-            for (int i = 0; i < lines.size(); i++) {
-                String line = lines.get(i);
-                Matcher fence = FENCE.matcher(line);
-                if (fence.matches()) {
-                    inside = !inside;
-                    if (inside && SHELLS.contains(fence.group(1))) {
-                        blocks++;
-                        if (!fence.group(1).equals("bash") || !RUN_OR_NOT.matcher(before).matches()) {
-                            unmarked.add(guide + ":" + (i + 1));
-                        }
-                    }
-                }
-                if (!line.isBlank()) {
-                    before = line;
+        for (Path document : documents(Path.of(""))) {
+            if (document.equals(Path.of("README.md"))) {
+                continue;
+            }
+            for (ShellBlock block : shellBlocks(document)) {
+                blocks++;
+                if (!block.language().equals("bash") || !RUN_OR_NOT.matcher(block.before()).matches()) {
+                    unmarked.add(slashes(document) + ":" + block.line());
                 }
             }
-            assertFalse(inside, guide + " ends inside a block");
         }
         assertEquals(List.of(), unmarked, "blocks of shell commands that are not bash blocks with '<!-- run -->' "
                 + "or '<!-- not run: the reason -->' on the line before them");
-        assertTrue(blocks > 0, "the guides have blocks of shell commands");
+        assertTrue(blocks > 0, "the documents have blocks of shell commands");
+    }
+
+    /**
+     * A document that marks a block as run is one {@code DocsIT} follows,
+     * and the other way round: a marker that no test reads would say what
+     * is not so.
+     */
+    @Test
+    void theDocumentsThatMarkBlocksAsRunAreTheOnesTheIntegrationSuiteFollows() throws IOException {
+        List<String> marked = new ArrayList<>();
+        for (Path document : documents(Path.of(""))) {
+            if (shellBlocks(document).stream().anyMatch(block -> RUN.matcher(block.before()).matches())) {
+                marked.add(slashes(document));
+            }
+        }
+        assertEquals(FOLLOWED.stream().map(name -> "docs/" + name + ".md").toList(), marked);
+
+        String suite = Files.readString(Path.of("src/integrationTest/java/dev/kfkit/kfkrbac/DocsIT.java"));
+        for (String name : FOLLOWED) {
+            assertTrue(suite.contains("follow(\"" + name + "\");"), "DocsIT follows docs/" + name + ".md");
+        }
+    }
+
+    /**
+     * The README shows no shell command of its own: each of its blocks is,
+     * word for word, a block that a document of {@code docs/} has and
+     * {@code DocsIT} runs there, or says before it why it is not run.
+     */
+    @Test
+    void everyShellBlockOfTheReadmeIsOneADocumentRuns() throws IOException {
+        List<String> run = new ArrayList<>();
+        for (Path document : documents(Path.of(""))) {
+            for (ShellBlock block : shellBlocks(document)) {
+                if (RUN.matcher(block.before()).matches()) {
+                    run.add(block.text());
+                }
+            }
+        }
+        List<String> own = new ArrayList<>();
+        List<ShellBlock> blocks = shellBlocks(Path.of("README.md"));
+        for (ShellBlock block : blocks) {
+            boolean notRun = RUN_OR_NOT.matcher(block.before()).matches() && !RUN.matcher(block.before()).matches();
+            if (!block.language().equals("bash") || !notRun && !run.contains(block.text())) {
+                own.add("README.md:" + block.line());
+            }
+        }
+        assertEquals(List.of(), own, "blocks of shell commands of the README that no document of docs/ runs as "
+                + "they are, and that have no '<!-- not run: the reason -->' before them");
+        assertTrue(blocks.size() > 1, "the README has blocks of shell commands");
+    }
+
+    /**
+     * A fenced block of shell commands.
+     *
+     * @param line the line it opens at
+     * @param language the language of its fence
+     * @param before the last line before it that is not empty
+     * @param text what is inside
+     */
+    private record ShellBlock(int line, String language, String before, String text) {
+    }
+
+    private static List<ShellBlock> shellBlocks(Path document) throws IOException {
+        List<ShellBlock> blocks = new ArrayList<>();
+        List<String> lines = Files.readAllLines(document);
+        String before = "";
+        for (int i = 0; i < lines.size(); i++) {
+            String line = lines.get(i);
+            Matcher fence = FENCE.matcher(line);
+            if (fence.matches()) {
+                int opens = i + 1;
+                StringBuilder text = new StringBuilder();
+                for (i++; i < lines.size() && !lines.get(i).strip().equals("```"); i++) {
+                    text.append(lines.get(i).strip()).append('\n');
+                }
+                assertTrue(i < lines.size(), document + " ends inside the block that opens at line " + opens);
+                if (SHELLS.contains(fence.group(1))) {
+                    blocks.add(new ShellBlock(opens, fence.group(1), before, text.toString()));
+                }
+                before = "```";
+            } else if (!line.isBlank()) {
+                before = line;
+            }
+        }
+        return blocks;
     }
 
     private static List<String> broken(List<Path> documents, List<String> links) throws IOException {

@@ -27,8 +27,10 @@ import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.testcontainers.containers.Container.ExecResult;
+import org.testcontainers.containers.ExecConfig;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.images.builder.Transferable;
@@ -46,7 +48,10 @@ import org.testcontainers.utility.MountableFile;
  * {@code localhost:9092}, the files are in the directory the commands run
  * in, next to the built jar under the name it was built with, and
  * {@code KAFKA_HOME} is the distribution of the image with its {@code bin}
- * on the {@code PATH}. So a command is run as the page has it.
+ * on the {@code PATH}. So a command is run as the page has it. The example
+ * files of {@code docs/examples/} are there under that path, and so is what
+ * {@code docs/connect.md} says its worker has before the extension is
+ * installed: {@code worker.properties} and the file of its users.
  *
  * <p>The node is started in one of two ways, which are the two ways
  * {@code docs/install.md} installs the jar:
@@ -104,7 +109,8 @@ final class DocBroker implements AutoCloseable {
      * does. The properties file is copied once, when the storage is
      * formatted, so what a page changes in it is there after a restart. The
      * JMX port is the node's own and not the container's: a tool run next
-     * to it would try to open it too.
+     * to it would try to open it too. The third argument is what is done
+     * once more, before the storage is formatted.
      */
     private static final String START = """
             #!/usr/bin/env bash
@@ -112,12 +118,16 @@ final class DocBroker implements AutoCloseable {
             cd %1$s
             if [ ! -f /tmp/kfkrbac-docs/data/meta.properties ]; then
               cp %2$s/server.properties config/server.properties
+              %3$s
               bin/kafka-storage.sh format -t 4L6g3nShT-eMCtK--X86sw -c config/server.properties
             fi
             export KAFKA_OPTS=-Djava.security.auth.login.config=%2$s/jaas.conf
             export JMX_PORT=9999
             exec bin/kafka-server-start.sh config/server.properties
-            """.formatted(KAFKA_HOME, WORK);
+            """;
+
+    /** The jar in {@code libs/}, as {@code docs/install.md} puts it there. */
+    private static final String INSTALL_THE_JAR = "cp " + WORK + "/kfkrbac-*.jar libs/";
 
     private static final String JAAS = """
             KafkaServer {
@@ -128,7 +138,39 @@ final class DocBroker implements AutoCloseable {
               user_%3$s="%4$s"
               user_%5$s="%6$s";
             };
-            """.formatted(ADMIN, Node.password(ADMIN), ALICE, Node.password(ALICE), BOB, Node.password(BOB));
+            KafkaConnect {
+              org.apache.kafka.connect.rest.basic.auth.extension.PropertyFileLoginModule required
+              file="%7$s/passwords.properties";
+            };
+            """.formatted(ADMIN, Node.password(ADMIN), ALICE, Node.password(ALICE), BOB, Node.password(BOB), WORK);
+
+    /**
+     * The settings of a Connect worker that runs next to the node, in its
+     * container, as {@code docs/connect.md} says the worker of its examples
+     * is set up before the extension is installed: it connects to the node
+     * as {@code User:admin} and authenticates the callers of its REST
+     * interface with HTTP basic authentication, the extension that ships
+     * with Apache Kafka, against {@code passwords.properties}.
+     */
+    private static final String WORKER_PROPERTIES = """
+            bootstrap.servers=localhost:9092
+            %1$s
+            %2$s
+            %3$s
+            group.id=connect-cluster
+            config.storage.topic=connect-configs
+            offset.storage.topic=connect-offsets
+            status.storage.topic=connect-status
+            config.storage.replication.factor=1
+            offset.storage.replication.factor=1
+            status.storage.replication.factor=1
+            key.converter=org.apache.kafka.connect.storage.StringConverter
+            value.converter=org.apache.kafka.connect.storage.StringConverter
+            listeners=http://localhost:8083
+            plugin.path=/tmp/kfkrbac-docs/plugins
+            rest.extension.classes=org.apache.kafka.connect.rest.basic.auth.extension.BasicAuthSecurityRestExtension
+            """.formatted(clientProperties(ADMIN).strip(), prefixed("producer.", clientProperties(ADMIN)),
+                    prefixed("consumer.", clientProperties(ADMIN)));
 
     /** What a block of commands did. */
     record Result(int exit, String output) {
@@ -140,7 +182,10 @@ final class DocBroker implements AutoCloseable {
     private DocBroker(GenericContainer<?> container) {
         this.container = container
                 .withCopyFileToContainer(MountableFile.forHostPath(jar()), WORK + "/" + jar().getFileName())
+                .withCopyFileToContainer(MountableFile.forHostPath(Path.of("docs/examples")), WORK + "/docs/examples")
                 .withCopyToContainer(Transferable.of(JAAS), WORK + "/jaas.conf")
+                .withCopyToContainer(Transferable.of(passwords()), WORK + "/passwords.properties")
+                .withCopyToContainer(Transferable.of(WORKER_PROPERTIES), WORK + "/worker.properties")
                 .waitingFor(Wait.forLogMessage(".*" + STARTED + ".*\\n", 1).withStartupTimeout(START_TIMEOUT));
         for (String user : List.of(ADMIN, ALICE, BOB)) {
             this.container.withCopyToContainer(Transferable.of(clientProperties(user)),
@@ -154,10 +199,24 @@ final class DocBroker implements AutoCloseable {
      * one, and its super users.
      */
     static DocBroker fromTheDistribution(String... settings) {
+        return fromTheDistribution("", settings);
+    }
+
+    /**
+     * The same with the jar in {@code libs/} from the first start, for a
+     * page whose cluster runs {@code RbacAuthorizer} before its first
+     * command: these settings name it.
+     */
+    static DocBroker fromTheDistributionWithTheJar(String... settings) {
+        return fromTheDistribution(INSTALL_THE_JAR, settings);
+    }
+
+    private static DocBroker fromTheDistribution(String first, String... settings) {
         String properties = SERVER_PROPERTIES + String.join("\n", settings) + "\n";
         return new DocBroker(new GenericContainer<>(image())
                 .withCopyToContainer(Transferable.of(properties), WORK + "/server.properties")
-                .withCopyToContainer(Transferable.of(START, 0100755), WORK + "/start.sh")
+                .withCopyToContainer(Transferable.of(START.formatted(KAFKA_HOME, WORK, first), 0100755),
+                        WORK + "/start.sh")
                 .withCreateContainerCmdModifier(create -> create.withEntrypoint(WORK + "/start.sh")));
     }
 
@@ -202,9 +261,32 @@ final class DocBroker implements AutoCloseable {
         return image.substring(image.lastIndexOf(':') + 1);
     }
 
+    /** Starts the node, and lets the commands of a page write files where they run. */
     void start() {
         container.start();
         starts++;
+        asRoot("chmod -R a+rwX " + WORK);
+    }
+
+    /**
+     * Runs a command as the administrator of the container, which the
+     * commands of a page are not: for what a page says its reader has and
+     * the image has not.
+     */
+    void asRoot(String command) {
+        try {
+            ExecResult result = container.execInContainer(
+                    ExecConfig.builder().user("root").command(new String[] {"sh", "-c", command}).build());
+            if (result.getExitCode() != 0) {
+                throw new AssertionError("'" + command + "' failed with status " + result.getExitCode() + ":\n"
+                        + result.getStdout() + result.getStderr());
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("interrupted", e);
+        }
     }
 
     /** Shuts the node down in an orderly way and starts it again; its data and its files stay. */
@@ -274,6 +356,19 @@ final class DocBroker implements AutoCloseable {
                 sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required \
                 username="%s" password="%s";
                 """.formatted(user, Node.password(user));
+    }
+
+    /** The users of the worker's REST interface: the node's users, with the same passwords. */
+    private static String passwords() {
+        StringBuilder passwords = new StringBuilder();
+        for (String user : List.of(ADMIN, ALICE, BOB)) {
+            passwords.append(user).append(": ").append(Node.password(user)).append('\n');
+        }
+        return passwords.toString();
+    }
+
+    private static String prefixed(String prefix, String settings) {
+        return settings.strip().lines().map(line -> prefix + line).collect(Collectors.joining("\n"));
     }
 
     private static int timesStarted(String log) {

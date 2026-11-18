@@ -738,6 +738,64 @@ class RbacAuthorizerGroupsTest {
         assertEquals(List.of(), mutator.deleted);
     }
 
+    /**
+     * Both ways. An {@code ALLOW} ACL that lets a group {@code ALTER} the
+     * cluster is not "the ACLs alone" for a member: it does not let the
+     * member replace a user's SCRAM credentials, in either of the broker's
+     * questions, and does not make it a manager of access when a record is
+     * created or deleted. The same requests go through for a super user, for
+     * a {@code SystemAdmin}, held by name or through a group, and for a
+     * principal that an ACL allows by its own name.
+     */
+    @Test
+    void whatAnAclOfAGroupOnTheClusterDoesNotGiveASuperUserASystemAdminAndAnAclOfOnesOwnDo() {
+        start(ALICE_IN_PAYMENTS, allow("Group:payments", THE_CLUSTER, ALTER), ERIN_ADMINISTERS,
+                GRACE_ALTERS_THE_CLUSTER, member("User:heidi", "Group:admins"),
+                binding("SystemAdmin:Group:admins", THE_CLUSTER));
+
+        // The ACL of the group is honoured for its member at all: otherwise the denials below would show nothing.
+        assertEquals(ALLOWED, gate("alice", ApiKeys.ALTER_PARTITION_REASSIGNMENTS));
+        assertEquals(DENIED, gate("bob", ApiKeys.ALTER_PARTITION_REASSIGNMENTS));
+
+        assertEquals(DENIED, gate("alice", ApiKeys.ALTER_USER_SCRAM_CREDENTIALS));
+        assertEquals(DENIED, anywhere("alice", ApiKeys.ALTER_USER_SCRAM_CREDENTIALS));
+        for (AclBinding record : recordsFor("alice")) {
+            ApiException refused = refused(create("alice", record), 0);
+            assertInstanceOf(ClusterAuthorizationException.class, refused);
+            assertTrue(refused.getMessage().startsWith("User:alice may not create "), refused.getMessage());
+        }
+        ApiException kept = refused(delete("alice", ALICE_IN_PAYMENTS.toBinding().toFilter()).get(0));
+        assertInstanceOf(ClusterAuthorizationException.class, kept);
+        assertTrue(kept.getMessage().startsWith("User:alice may not delete "), kept.getMessage());
+        assertEquals(List.of(), mutator.created);
+        assertEquals(List.of(), mutator.deleted);
+
+        List<AclBinding> created = new ArrayList<>();
+        for (String user : List.of("admin", "erin", "heidi", "grace")) {
+            assertEquals(ALLOWED, gate(user, ApiKeys.ALTER_USER_SCRAM_CREDENTIALS), user);
+            assertEquals(ALLOWED, anywhere(user, ApiKeys.ALTER_USER_SCRAM_CREDENTIALS), user);
+            List<AclBinding> records = recordsFor(user);
+            assertCreated(create(user, records.toArray(AclBinding[]::new)), records.size());
+            created.addAll(records);
+            assertEquals(created, mutator.created, user);
+        }
+        // What they created changed nothing for the member of the group.
+        assertEquals(DENIED, gate("alice", ApiKeys.ALTER_USER_SCRAM_CREDENTIALS));
+        assertEquals(DENIED, anywhere("alice", ApiKeys.ALTER_USER_SCRAM_CREDENTIALS));
+    }
+
+    /** An ordinary ACL, a role binding and a membership, each of its own for that user: one of every kind of record. */
+    private static List<AclBinding> recordsFor(String user) {
+        return List.of(allow("User:" + user, literal(TOPIC, REPORTS), READ).toBinding(),
+                binding("DeveloperRead:User:" + user, prefixed(TOPIC, "reports.")).toBinding(),
+                member("User:" + user, "Group:readers").toBinding());
+    }
+
+    /** The broker's second question, {@code ALTER} on any cluster resource, before a request of that type. */
+    private AuthorizationResult anywhere(String user, ApiKeys api) {
+        return authorizer.authorizeByResourceType(RequestContext.of(user, "admin-1", api), ALTER, CLUSTER);
+    }
+
     // --- records change while requests are answered ------------------------------------------------------
 
     @Test

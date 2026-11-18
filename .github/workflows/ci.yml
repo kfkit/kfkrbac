@@ -79,9 +79,10 @@ jobs:
             build/reports/tests/
             build/integration-logs/
 
-  # The shell commands of docs/install.md, docs/bindings.md and
-  # docs/delegation.md, run as the pages have them in the container of a
-  # broker of the newest release, and their output compared with the pages'.
+  # The shell commands of the pages of docs/, run as the pages have them in
+  # the container of a broker of the newest release, those of
+  # docs/connect.md with a Connect worker next to it, and their output
+  # compared with the pages'.
   integration-docs:
     name: integration (docs)
     needs: check
