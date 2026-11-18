@@ -38,6 +38,13 @@ major version is 0.
   cluster of a controller and several brokers: `./gradlew integrationTest`,
   `-PbrokerVersion=4.1.2` for another release. It needs Docker and is skipped
   without it; `./gradlew check -PintegrationTest` makes it part of `check`.
+- The command: `kafka-run-class.sh dev.kfkit.kfkrbac.RbacCommand` with the
+  verbs `bind`, `unbind`, `list` (`--output json`), `who-can` and
+  `what-can`, through the admin client only. `who-can` and `what-can` give
+  the authorizer's own answer for the ACL records of the cluster, with the
+  binding or ACL behind each line. Exit status 0 done, 1 refused or failed,
+  2 wrong usage. See [docs/command.md](docs/command.md). The `group` verbs,
+  `apply` and `import` do not exist yet.
 - A release workflow: a `vX.Y.Z` tag runs the whole check and publishes a
   GitHub Release with the jar, its SHA-256, a keyless cosign signature and a
   build provenance attestation. How to verify a released jar is in

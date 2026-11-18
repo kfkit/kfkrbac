@@ -10,8 +10,10 @@ One jar, one line of configuration, free and open source.
 > integration tests, on Kafka 4.1 to 4.4. Who may bind what is
 > decided when an ACL record is created or deleted: whoever the ACLs allow
 > to alter the cluster, or a `SystemAdmin`, anything; a `ResourceOwner`
-> bindings inside what it owns; everyone else nothing. Groups, the
-> command and the extensions for schemas and connectors do not exist. What
+> bindings inside what it owns; everyone else nothing. The command binds,
+> unbinds and lists bindings and answers "who can" and "what can"
+> ([docs/command.md](docs/command.md)). Groups, `apply`, `import` and the
+> extension for connectors do not exist. What
 > is described below is the design, not something you can install.
 
 ## Why
@@ -42,7 +44,8 @@ topic, a prefix or the whole cluster.
   server, no topic to create.
 - The tools you have keep working. A binding is created and listed with the
   ACL tool, `AdminClient` or whatever manages your ACLs today; a command of
-  our own makes it shorter and answers "who can read this topic".
+  our own makes it shorter and answers "who can read this topic". The
+  command is in [docs/command.md](docs/command.md).
 - Delegation: the owner of a prefix hands out roles inside it, and nowhere
   else.
 - Connectors: the same jar plugs into Kafka Connect and applies the same
@@ -94,6 +97,13 @@ A role binding is an ACL whose principal names the role and the member:
 kafka-acls.sh --bootstrap-server localhost:9092 --add \
   --allow-principal 'DeveloperRead:User:alice' --operation All \
   --topic billing. --resource-pattern-type prefixed
+```
+
+The same with the command:
+
+```bash
+kafka-run-class.sh dev.kfkit.kfkrbac.RbacCommand bind --bootstrap-server localhost:9092 \
+  --role DeveloperRead --member User:alice --prefix billing.
 ```
 
 `User:alice` may now read the topics and use the consumer groups whose names
