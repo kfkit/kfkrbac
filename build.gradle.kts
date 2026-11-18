@@ -13,6 +13,11 @@ group = "dev.kfkit"
 // newest supported release.
 val kafkaVersion = "4.4.0"
 
+// What a Connect worker of that release has on its class path.
+val jakartaRsVersion = "3.1.0"
+val jacksonVersion = "2.21.7"
+val jerseyVersion = "3.1.10"
+
 // The broker image the integration tests run the jar on: -PbrokerVersion=4.1.2.
 val brokerVersion = providers.gradleProperty("brokerVersion").getOrElse(kafkaVersion)
 
@@ -35,10 +40,20 @@ dependencies {
     compileOnly("org.apache.kafka:kafka-server-common:$kafkaVersion")
     // The broker ships an SLF4J; Kafka's own POM has it at runtime scope only.
     compileOnly("org.slf4j:slf4j-api:1.7.36")
+    // The extension for Kafka Connect: the worker provides these. None of them
+    // goes into the jar; a bundled jakarta.* breaks the worker.
+    compileOnly("org.apache.kafka:connect-api:$kafkaVersion")
+    compileOnly("jakarta.ws.rs:jakarta.ws.rs-api:$jakartaRsVersion")
+    compileOnly("com.fasterxml.jackson.core:jackson-databind:$jacksonVersion")
 
     testImplementation("org.apache.kafka:kafka-metadata:$kafkaVersion")
     testImplementation("org.apache.kafka:kafka-clients:$kafkaVersion")
     testImplementation("org.apache.kafka:kafka-server-common:$kafkaVersion")
+    testImplementation("org.apache.kafka:connect-api:$kafkaVersion")
+    testImplementation("jakarta.ws.rs:jakarta.ws.rs-api:$jakartaRsVersion")
+    testImplementation("com.fasterxml.jackson.core:jackson-databind:$jacksonVersion")
+    // Builds the responses the filter aborts with, as the worker's own JAX-RS does.
+    testRuntimeOnly("org.glassfish.jersey.core:jersey-common:$jerseyVersion")
     // The admin client with a mock network underneath: what the command sends and how it reads a refusal.
     testImplementation("org.apache.kafka:kafka-clients:$kafkaVersion:test-fixtures")
     testImplementation(platform("org.junit:junit-bom:6.1.3"))
