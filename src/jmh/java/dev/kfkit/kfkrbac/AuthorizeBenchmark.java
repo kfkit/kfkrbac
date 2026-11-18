@@ -60,6 +60,14 @@ import org.openjdk.jmh.annotations.TearDown;
  * {@code parentAllowedByAcl} is the broker's own {@link StandardAuthorizer}
  * holding the same records and answering {@code alice}: what an ACL-allowed
  * request costs without roles.
+ *
+ * <p>The benchmarks named {@code WithMetrics} ask an authorizer that holds
+ * the same records and has {@code kfkrbac.metrics.enabled=true}, once the
+ * series of the request exists, which is every call but the first. That
+ * authorizer is a state of its own, {@link Metered}, so that the JVM of a
+ * benchmark without metrics never has a recorder in it, as a broker with
+ * the setting off does not: a recorder that exists anywhere in the JVM
+ * changes what the JIT compiler makes of the parent's code.
  */
 @State(Scope.Benchmark)
 public class AuthorizeBenchmark {
@@ -77,13 +85,14 @@ public class AuthorizeBenchmark {
 
     private StandardAuthorizer parent;
     private RbacAuthorizer rbac;
+    private Map<Uuid, StandardAcl> acls;
     private final AuthorizableRequestContext alice = context("alice");
     private final AuthorizableRequestContext bob = context("bob");
     private final AuthorizableRequestContext dave = context("dave");
 
     @Setup(Level.Trial)
     public void setUp() {
-        Map<Uuid, StandardAcl> acls = new HashMap<>();
+        acls = new HashMap<>();
         for (int i = 0; i < 1000; i++) {
             acls.put(Uuid.randomUuid(), acl("User:app-" + i, "topic-" + i, PatternType.LITERAL,
                     AclPermissionType.ALLOW));
@@ -104,8 +113,8 @@ public class AuthorizeBenchmark {
             acls.put(Uuid.randomUuid(), binding("DeveloperRead:User:app-" + i % 1000, "team-" + i + "."));
         }
 
-        parent = start(new StandardAuthorizer(), acls);
-        rbac = start(new RbacAuthorizer(), acls);
+        parent = start(new StandardAuthorizer(), Map.of(), acls);
+        rbac = start(new RbacAuthorizer(), Map.of(), acls);
     }
 
     @TearDown(Level.Trial)
@@ -130,6 +139,16 @@ public class AuthorizeBenchmark {
     }
 
     @Benchmark
+    public AuthorizationResult allowedByAclWithMetrics(Metered metered) {
+        return metered.authorizer.authorize(alice, READ_INVOICES).get(0);
+    }
+
+    @Benchmark
+    public AuthorizationResult allowedByRoleWithMetrics(Metered metered) {
+        return metered.authorizer.authorize(bob, READ_INVOICES).get(0);
+    }
+
+    @Benchmark
     public AuthorizationResult deniedByAcl() {
         return rbac.authorize(bob, READ_PAYROLL).get(0);
     }
@@ -139,8 +158,26 @@ public class AuthorizeBenchmark {
         return rbac.authorize(dave, READ_INVOICES).get(0);
     }
 
-    private static <A extends StandardAuthorizer> A start(A authorizer, Map<Uuid, StandardAcl> acls) {
-        authorizer.configure(Map.of());
+    /** An authorizer with the records of the benchmark and kfkwho's metrics on. */
+    @State(Scope.Benchmark)
+    public static class Metered {
+
+        private RbacAuthorizer authorizer;
+
+        @Setup(Level.Trial)
+        public void setUp(AuthorizeBenchmark records) {
+            authorizer = start(new RbacAuthorizer(), Map.of("kfkrbac.metrics.enabled", "true"), records.acls);
+        }
+
+        @TearDown(Level.Trial)
+        public void tearDown() throws IOException {
+            authorizer.close();
+        }
+    }
+
+    private static <A extends StandardAuthorizer> A start(A authorizer, Map<String, ?> configs,
+            Map<Uuid, StandardAcl> acls) {
+        authorizer.configure(configs);
         authorizer.withPluginMetrics(new PluginMetricsImpl(new Metrics(), Map.of()));
         authorizer.loadSnapshot(acls);
         authorizer.completeInitialLoad();
