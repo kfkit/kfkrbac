@@ -1,0 +1,103 @@
+# On a version tag vX.Y.Z: the whole check, then the jar built with the
+# tag's version, signed with cosign (keyless, GitHub OIDC), its SHA-256, a
+# build provenance attestation, and a GitHub release with generated notes.
+# A failed step publishes nothing: the release is the last step.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write      # the release
+  id-token: write      # cosign keyless signing, the attestation
+  attestations: write  # the attestation
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref }}
+
+      - id: version
+        name: version from the tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::tag $TAG is not vX.Y.Z"
+            exit 1
+          fi
+          version="${TAG#v}"
+          case "$version" in
+            *SNAPSHOT*) echo "::error::a release is never a SNAPSHOT"; exit 1 ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "jar=kfkrbac-$version.jar" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v6
+
+      - name: the whole check, and the jar with the tag's version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          ./gradlew build --no-daemon "-Pversion=$VERSION"
+          # The integration suite runs here as soon as the build has one.
+          if ./gradlew tasks --all --no-daemon -q | grep -Eq '^integrationTest( |$)'; then
+            ./gradlew integrationTest --no-daemon "-Pversion=$VERSION"
+          fi
+
+      - name: the jar carries the version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          JAR: ${{ steps.version.outputs.jar }}
+        run: |
+          test -f "build/libs/$JAR"
+          manifest="$(unzip -p "build/libs/$JAR" META-INF/MANIFEST.MF | tr -d '\r')"
+          echo "$manifest"
+          grep -qx "Implementation-Version: $VERSION" <<< "$manifest"
+          mkdir dist
+          cp "build/libs/$JAR" dist/
+
+      - uses: sigstore/cosign-installer@v3
+      - name: sign
+        working-directory: dist
+        env:
+          JAR: ${{ steps.version.outputs.jar }}
+        run: cosign sign-blob --yes --bundle "$JAR.sigstore.json" "$JAR"
+
+      - name: SHA-256
+        working-directory: dist
+        env:
+          JAR: ${{ steps.version.outputs.jar }}
+        run: sha256sum "$JAR" > "$JAR.sha256"
+
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/${{ steps.version.outputs.jar }}
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/${{ steps.version.outputs.jar }}
+            dist/${{ steps.version.outputs.jar }}.sha256
+            dist/${{ steps.version.outputs.jar }}.sigstore.json
+          body: |
+            Copy `${{ steps.version.outputs.jar }}` to `libs/` on every node, controllers included, and set `authorizer.class.name=dev.kfkit.kfkrbac.RbacAuthorizer`.
+
+            Verify the jar before you install it ([how](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/provenance/README.md)):
+
+                sha256sum -c ${{ steps.version.outputs.jar }}.sha256
+                cosign verify-blob ${{ steps.version.outputs.jar }} \
+                  --bundle ${{ steps.version.outputs.jar }}.sigstore.json \
+                  --certificate-identity-regexp '^https://github.com/${{ github.repository }}/' \
+                  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+                gh attestation verify ${{ steps.version.outputs.jar }} --repo ${{ github.repository }}

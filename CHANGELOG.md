@@ -22,3 +22,10 @@ major version is 0.
   role that is not a well-formed binding grants nothing, is logged once and
   counted in the gauge `malformed-bindings`. Who may create a binding is not
   checked yet, and group membership is not honoured.
+- A release workflow: a `vX.Y.Z` tag runs the whole check and publishes a
+  GitHub Release with the jar, its SHA-256, a keyless cosign signature and a
+  build provenance attestation. How to verify a released jar is in
+  [docs/provenance](docs/provenance/README.md).
+- `./gradlew publishToMavenLocal` produces the jar, sources, javadoc and a
+  POM with what Maven Central asks for; the version comes from
+  `-Pversion`.

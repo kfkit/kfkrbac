@@ -1,0 +1,11 @@
+kfkrbac release hashes, for timestamping.
+
+Repository: https://github.com/kfkit/kfkrbac
+Artifact:   dev.kfkit:kfkrbac (GitHub Releases)
+Copyright:  2026 Ivan Abramov, Apache-2.0
+
+Each line names a signed git tag, the tag object, the commit it points at
+(a hash of the whole source tree) and the SHA-256 of the source archive
+produced by `git archive --format=tar <tag>`, with the version of git used.
+
+No release yet.
