@@ -39,6 +39,8 @@ dependencies {
     testImplementation("org.apache.kafka:kafka-metadata:$kafkaVersion")
     testImplementation("org.apache.kafka:kafka-clients:$kafkaVersion")
     testImplementation("org.apache.kafka:kafka-server-common:$kafkaVersion")
+    // The admin client with a mock network underneath: what the command sends and how it reads a refusal.
+    testImplementation("org.apache.kafka:kafka-clients:$kafkaVersion:test-fixtures")
     testImplementation(platform("org.junit:junit-bom:6.1.3"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
