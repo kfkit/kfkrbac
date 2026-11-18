@@ -23,8 +23,18 @@ topic, a prefix or the whole cluster.
   role is bound.
 - Roles only add access. What an ACL denies stays denied; a request no ACL
   allows is allowed when a role bound to its principal covers it.
-- Roles and bindings live in the cluster itself, not in a file on every
-  node, and every node reads them from there.
+- One binding for one application: a role bound to the prefix `billing.`
+  covers the topics and the consumer groups that start with it.
+- Nothing else to run. Bindings live in the cluster's own metadata, next to
+  the ACLs, and reach every node the way ACLs do: no service, no directory
+  server, no topic to create.
+- The tools you have keep working. A binding is created and listed with the
+  ACL tool, `AdminClient` or whatever manages your ACLs today; a command of
+  our own makes it shorter and answers "who can read this topic".
+- Delegation: the owner of a prefix hands out roles inside it, and nowhere
+  else.
+- Schemas and connectors: the same jar plugs into Kafka Connect and a schema
+  registry and applies the same bindings there.
 - Access metrics on request: the per-principal, per-client, per-topic
   metrics of [kfkwho](https://github.com/kfkit/kfkwho), with its exporter
   rules and dashboard unchanged. Off by default.
@@ -39,21 +49,19 @@ echo 'authorizer.class.name=dev.kfkit.kfkrbac.RbacAuthorizer' >> "$KAFKA_HOME/co
 Then restart, node by node. The jar has no dependencies to install next to
 it.
 
-## Starting up
+## A binding, as designed
 
-Roles are read from the cluster, so a node that has just started does not
-have them yet. Until it has loaded both the ACLs and the roles:
+A role binding is an ACL whose principal names the role and the member:
 
-| Principal | What happens |
-|---|---|
-| in `super.users` | allowed, as always |
-| in `kfkrbac.early.users` | decided by the ACLs alone |
-| anyone else | "authorizer not ready", which clients retry |
+```bash
+kafka-acls.sh --bootstrap-server localhost:9092 --add \
+  --allow-principal 'DeveloperRead:User:alice' --operation All \
+  --topic billing. --resource-pattern-type prefixed
+```
 
-Nobody is let in by mistake while the roles are missing. `kfkrbac.early.users`
-is for what must work before the roles are there: the account that reads
-them, monitoring, a service whose access is granted by ACLs anyway. It has
-the format of `super.users` and is empty by default.
+`User:alice` may now read the topics and use the consumer groups whose names
+start with `billing.`. No client is ever a principal of type `DeveloperRead`,
+so to a broker without kfkrbac the record means nothing.
 
 ## Compatibility
 
