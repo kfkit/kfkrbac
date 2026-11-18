@@ -5,9 +5,10 @@ Connect: a request is allowed when a role bound to the caller covers the
 connector, and refused otherwise, saying which operation on which connector
 was missing.
 
-> Status: the extension is built and its filter is tested request by
-> request; it has not yet run in a Connect worker of each supported release.
-> That test, and members of groups, come next.
+> Status: the extension is built, its filter is tested request by request,
+> and the integration tests run it in two Connect workers of Kafka 4.1.2,
+> 4.2.2, 4.3.1 and 4.4.0 with basic authentication, forwarding between
+> them included. Mutual TLS has not run in a real worker yet.
 
 ## Installation
 
@@ -92,6 +93,10 @@ on connectors is in [roles.md](roles.md).
   connectors; a connector's configuration (`info`) only where the caller
   may also `ReadConfig`.
 - A principal in `kfkrbac.super.users` passes every request.
+- A role bound to a group (`DeveloperManage:Group:payments`) applies to the
+  group's members: the extension reads the membership records together with
+  the bindings, and a membership is in force when the binding would be.
+  Groups are in [groups.md](groups.md).
 - A refusal is a 403 whose body says what was missing:
 
   ```json
@@ -146,7 +151,5 @@ decided where it arrived, and the workers' own principal has to be in
   does not register extensions on that listener in 4.1.x, 4.2.0, 4.2.1,
   4.3.0 and 4.3.1: requests to `/admin/loggers` there are outside what the
   extension decides.
-- **Members of groups.** A binding whose member is a group does not apply to
-  the group's members here yet.
 - **Authentication and tokens.** The worker authenticates callers; the
   extension does not.

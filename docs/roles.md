@@ -12,7 +12,8 @@ own; a group that ordinary ACLs name does that job. Groups are in
 
 > Status: the authorizer reads bindings from ACL records and decides with
 > them, on real brokers too in the integration tests; the extension for
-> Kafka Connect decides with them for connectors ([connect.md](connect.md));
+> Kafka Connect decides with them for connectors, in real workers too
+> ([connect.md](connect.md));
 > nothing answers yet for subjects. The examples below are as designed.
 
 ## What each role grants
