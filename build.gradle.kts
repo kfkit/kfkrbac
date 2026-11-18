@@ -193,6 +193,10 @@ testing {
                     dependsOn(tasks.jar)
                     inputs.files(tasks.jar)
                     inputs.property("brokerVersion", brokerVersion)
+                    // DocsIT runs the commands of these pages: a change to a page alone reruns it.
+                    inputs.files(fileTree("docs") { include("*.md") })
+                        .withPropertyName("docs")
+                        .withPathSensitivity(PathSensitivity.RELATIVE)
                     outputs.dir(brokerLogs)
                     systemProperty("kfkrbac.it.jar", tasks.jar.get().archiveFile.get().asFile.absolutePath)
                     systemProperty("kfkrbac.it.image", "apache/kafka:$brokerVersion")
@@ -274,8 +278,9 @@ jmh {
 
 tasks.test {
     useJUnitPlatform()
-    // RoleTest compares these with the code: a change to them alone reruns it.
-    inputs.files("docs/roles.md", "README.md")
+    // RoleTest compares these with the code and DocsTest follows their links:
+    // a change to them alone reruns the tests.
+    inputs.files(fileTree("docs"), "README.md")
         .withPropertyName("docs")
         .withPathSensitivity(PathSensitivity.RELATIVE)
     // MetricsDocTest compares these with the code and with the kfkwho bundled.
