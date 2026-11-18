@@ -28,6 +28,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -91,6 +93,9 @@ final class Node implements AutoCloseable {
               user_%5$s="%6$s";
             };
             """.formatted(ADMIN, password(ADMIN), ALICE, password(ALICE), BOB, password(BOB));
+
+    /** The ports given to nodes: a port is free again the moment it was found, so it could be found twice. */
+    private static final Set<Integer> PORTS_GIVEN = ConcurrentHashMap.newKeySet();
 
     private final int id;
     private final GenericContainer<?> container;
@@ -244,8 +249,9 @@ final class Node implements AutoCloseable {
                 Files.writeString(dir.resolve(name + ".log"), container.getLogs());
                 container.copyFileFromContainer(AUTHORIZER_LOG, dir.resolve(name + "-authorizer.log").toString());
             }
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
+        } catch (IOException | RuntimeException e) {
+            // The logs are there to explain a failure; not having them is not one.
+            System.err.println("could not keep the logs of node " + id + " after " + test + ": " + e);
         } finally {
             close();
         }
@@ -273,12 +279,16 @@ final class Node implements AutoCloseable {
         return String.join("\n", lines.subList(Math.max(0, lines.size() - 40), lines.size()));
     }
 
-    /** A port that is free on this host now. */
+    /** A port that is free on this host now and that no other node of these tests was given. */
     private static int freePort() {
-        try (ServerSocket socket = new ServerSocket(0)) {
-            return socket.getLocalPort();
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
+        while (true) {
+            try (ServerSocket socket = new ServerSocket(0)) {
+                if (PORTS_GIVEN.add(socket.getLocalPort())) {
+                    return socket.getLocalPort();
+                }
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
         }
     }
 

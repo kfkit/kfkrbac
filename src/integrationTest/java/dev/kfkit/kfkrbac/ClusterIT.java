@@ -21,11 +21,13 @@ import static dev.kfkit.kfkrbac.Node.BOB;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
+import org.junit.jupiter.api.Timeout;
 import org.testcontainers.containers.Network;
 
 /**
@@ -39,6 +41,7 @@ import org.testcontainers.containers.Network;
  * one partition on one broker, named after it: producing to
  * {@code billing.on-3} asks the authorizer of broker 3.
  */
+@Timeout(value = 5, unit = TimeUnit.MINUTES)
 class ClusterIT {
 
     private static final String PREFIX = "billing.";

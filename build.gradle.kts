@@ -100,8 +100,11 @@ testing {
     }
 }
 
-if (providers.gradleProperty("integrationTest").isPresent) {
-    tasks.check {
+// check compiles the integration tests so that they cannot rot, and runs
+// them only when asked to.
+tasks.check {
+    dependsOn(tasks.named("integrationTestClasses"))
+    if (providers.gradleProperty("integrationTest").isPresent) {
         dependsOn(testing.suites.named("integrationTest"))
     }
 }

@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.time.Duration;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.kafka.common.acl.AccessControlEntryFilter;
 import org.apache.kafka.common.acl.AclBinding;
@@ -35,6 +36,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
+import org.junit.jupiter.api.Timeout;
 import org.testcontainers.containers.Network;
 
 /**
@@ -48,6 +50,7 @@ import org.testcontainers.containers.Network;
  * it, so the first request that depends on it is asked until it goes
  * through, with a bound; what follows from the same record is asked once.
  */
+@Timeout(value = 5, unit = TimeUnit.MINUTES)
 class BrokerIT {
 
     private static final String PREFIX = "billing.";
@@ -128,8 +131,8 @@ class BrokerIT {
         clients.createAcls(deny);
 
         Await.refused(IN_FORCE, "an ACL denies her that topic", () -> clients.produce(ALICE, TOPIC));
-        assertEquals(Set.of(binding, deny), clients.describeAcls(AclBindingFilter.ANY),
-                "the ACLs of the cluster: the binding stays next to the deny ACL");
+        // The binding stays next to the deny ACL.
+        awaitListed(AclBindingFilter.ANY, Set.of(binding, deny));
         clients.produce(ALICE, OTHER_TOPIC)
                 .assertAllowed("the binding is still in force and the deny ACL names another topic");
     }
