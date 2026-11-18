@@ -156,8 +156,9 @@ The first release.
   cluster of a controller and several brokers: `./gradlew integrationTest`,
   `-PbrokerVersion=4.1.2` for another release. It runs the command inside
   the broker's container with `kafka-run-class.sh`, every verb, and
-  `ConnectIT` runs two Connect workers with the jar as their extension
-  against a broker with the jar, on each of those releases. It needs Docker
+  `ConnectIT` and `TlsConnectIT` run two Connect workers with the jar as
+  their extension against a broker with the jar, with basic authentication
+  and with mutual TLS, on each of those releases. It needs Docker
   and is skipped without it; `./gradlew check -PintegrationTest` makes it
   part of `check`.
 - JMH benchmarks of `authorize`, `./gradlew jmh`: without and with roles,
