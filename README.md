@@ -76,7 +76,9 @@ echo 'authorizer.class.name=dev.kfkit.kfkrbac.RbacAuthorizer' >> "$KAFKA_HOME/co
 ```
 
 Then restart, node by node. The jar has no dependencies to install next to
-it.
+it. A release carries the jar, its SHA-256 and a keyless signature; how to
+verify them is in [docs/provenance](docs/provenance/README.md), and the
+steps are in [docs/install.md](docs/install.md).
 
 ## A binding, as designed
 
@@ -102,7 +104,11 @@ Compiled against Kafka 4.4, Java 17. Kafka 4.1 and later is the target
 ```bash
 ./gradlew check
 ./gradlew jmh      # the cost of authorize(), in build/results/jmh/
+./gradlew publishToMavenLocal -Pversion=0.0.0-test   # jar, sources, javadoc, POM
 ```
+
+A release is a signed `vX.Y.Z` tag; the [release workflow](.github/workflows/release.yml)
+does the rest.
 
 Rules for contributors, human or agent, are in [AGENTS.md](AGENTS.md).
 
