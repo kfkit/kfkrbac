@@ -87,6 +87,7 @@ Compiled against Kafka 4.4, Java 17. Kafka 4.1 and later is the target
 
 ```bash
 ./gradlew check
+./gradlew jmh      # the cost of authorize(), in build/results/jmh/
 ```
 
 Rules for contributors, human or agent, are in [AGENTS.md](AGENTS.md).

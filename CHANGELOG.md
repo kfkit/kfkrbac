@@ -13,3 +13,4 @@ major version is 0.
   no ACL allows, never one a deny ACL denies, in `authorize` and in
   `authorizeByResourceType`. No roles can be defined yet, so the verdict is
   still the ACLs'.
+- A JMH benchmark of `authorize`: `./gradlew jmh`.
