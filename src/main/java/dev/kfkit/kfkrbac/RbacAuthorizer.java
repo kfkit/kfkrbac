@@ -24,21 +24,34 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.IntFunction;
 
 import org.apache.kafka.common.Uuid;
+import org.apache.kafka.common.acl.AclBinding;
+import org.apache.kafka.common.acl.AclBindingFilter;
 import org.apache.kafka.common.acl.AclOperation;
 import org.apache.kafka.common.acl.AclPermissionType;
+import org.apache.kafka.common.errors.ApiException;
+import org.apache.kafka.common.errors.ClusterAuthorizationException;
+import org.apache.kafka.common.errors.InvalidRequestException;
 import org.apache.kafka.common.metrics.Gauge;
 import org.apache.kafka.common.metrics.Metrics;
 import org.apache.kafka.common.metrics.PluginMetrics;
 import org.apache.kafka.common.metrics.internals.PluginMetricsImpl;
+import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.resource.PatternType;
+import org.apache.kafka.common.resource.Resource;
 import org.apache.kafka.common.resource.ResourcePattern;
 import org.apache.kafka.common.resource.ResourceType;
 import org.apache.kafka.common.security.auth.KafkaPrincipal;
 import org.apache.kafka.metadata.authorizer.StandardAcl;
 import org.apache.kafka.metadata.authorizer.StandardAuthorizer;
+import org.apache.kafka.server.authorizer.AclCreateResult;
+import org.apache.kafka.server.authorizer.AclDeleteResult;
+import org.apache.kafka.server.authorizer.AclDeleteResult.AclBindingDeleteResult;
 import org.apache.kafka.server.authorizer.Action;
 import org.apache.kafka.server.authorizer.AuthorizableRequestContext;
 import org.apache.kafka.server.authorizer.AuthorizationResult;
@@ -70,6 +83,15 @@ import org.slf4j.LoggerFactory;
  * matches, by Kafka's own matching rules. It is asked only after the parent
  * has denied and a role has granted, so a request an ACL allows costs what it
  * costs without roles.
+ *
+ * <p>Bindings are created and deleted through the ACL API, and
+ * {@link #createAcls} and {@link #deleteAcls}, which the controller calls
+ * with the caller's own principal, decide who may: the rules are
+ * {@link Delegation}'s. A principal that holds {@code ResourceOwner} is let
+ * through the broker's check before those calls, and before a listing of
+ * the ACLs, and through nothing else that check guards. The same check
+ * guards the request that replaces a user's password, and there no role but
+ * {@code SystemAdmin} passes it.
  *
  * <p>Configure with {@code authorizer.class.name=dev.kfkit.kfkrbac.RbacAuthorizer}.
  */
@@ -247,7 +269,12 @@ public class RbacAuthorizer extends StandardAuthorizer {
             return parent;
         }
         try {
-            for (ResourcePattern pattern : roles.grantedPatterns(principal(requestContext), op, resourceType)) {
+            KafkaPrincipal principal = principal(requestContext);
+            if (keptForSystemAdmin(requestContext, op, resourceType)
+                    && !bindings.holds(principal, Role.SYSTEM_ADMIN)) {
+                return AuthorizationResult.DENIED;
+            }
+            for (ResourcePattern pattern : roles.grantedPatterns(principal, op, resourceType)) {
                 if (!coveredByDeny(requestContext, op, pattern)) {
                     return AuthorizationResult.ALLOWED;
                 }
@@ -257,6 +284,119 @@ public class RbacAuthorizer extends StandardAuthorizer {
                     resourceType, e);
         }
         return AuthorizationResult.DENIED;
+    }
+
+    /**
+     * Creates the records when the caller may create every one of them, and
+     * none otherwise: each result then says why.
+     *
+     * <p>Called on the controller, after it has asked {@link #authorize} for
+     * {@code ALTER} on the cluster, with the principal of whoever sent the
+     * request.
+     */
+    @Override
+    public List<? extends CompletionStage<AclCreateResult>> createAcls(AuthorizableRequestContext requestContext,
+            List<AclBinding> aclBindings) {
+        Delegation.Decision decision;
+        try {
+            decision = Delegation.create(caller(requestContext), aclBindings);
+        } catch (RuntimeException e) {
+            LOG.error("Could not decide whether {} may create {}; refused", requestContext.principal(), aclBindings,
+                    e);
+            AclCreateResult undecided = new AclCreateResult(undecided(requestContext, "created"));
+            return completed(aclBindings.size(), i -> undecided);
+        }
+        if (decision.allowed()) {
+            return super.createAcls(requestContext, aclBindings);
+        }
+        LOG.info("Refused to create {} ACL record(s): {}", aclBindings.size(), reason(decision));
+        return completed(aclBindings.size(), i -> new AclCreateResult(refusal(decision, i)));
+    }
+
+    /**
+     * Deletes what the filters match when the caller may delete every such
+     * record, and nothing otherwise: each result then says why.
+     *
+     * <p>A principal that the ACLs allow {@code ALTER} on the cluster, and a
+     * {@code SystemAdmin}, delete what their filters match when the
+     * controller applies them. Anyone else has the filters
+     * resolved here, against the records this node has, and deletes exactly
+     * the records that were checked: a record that appears between the check
+     * and the delete is not deleted with them.
+     */
+    @Override
+    public List<? extends CompletionStage<AclDeleteResult>> deleteAcls(AuthorizableRequestContext requestContext,
+            List<AclBindingFilter> aclBindingFilters) {
+        List<List<AclBinding>> matched; // null for a caller that may delete any record
+        Delegation.Decision decision;
+        try {
+            Delegation.Caller caller = caller(requestContext);
+            matched = caller.managesEverything() ? null : matched(aclBindingFilters);
+            decision = matched == null ? null : Delegation.delete(caller, matched);
+        } catch (RuntimeException e) {
+            LOG.error("Could not decide whether {} may delete what {} match; refused", requestContext.principal(),
+                    aclBindingFilters, e);
+            AclDeleteResult undecided = new AclDeleteResult(undecided(requestContext, "deleted"));
+            return completed(aclBindingFilters.size(), i -> undecided);
+        }
+        if (decision == null) {
+            return super.deleteAcls(requestContext, aclBindingFilters);
+        }
+        if (!decision.allowed()) {
+            LOG.info("Refused to delete what {} filter(s) match: {}", aclBindingFilters.size(), reason(decision));
+            return completed(aclBindingFilters.size(), i -> new AclDeleteResult(refusal(decision, i)));
+        }
+        return deleteExactly(requestContext, matched);
+    }
+
+    /** For each filter, the records this node has that it matches. */
+    private List<List<AclBinding>> matched(List<AclBindingFilter> filters) {
+        List<List<AclBinding>> matched = new ArrayList<>(filters.size());
+        for (AclBindingFilter filter : filters) {
+            List<AclBinding> records = new ArrayList<>();
+            acls(filter).forEach(records::add);
+            matched.add(records);
+        }
+        return matched;
+    }
+
+    /**
+     * Deletes these records and no other, each once, and answers for each of
+     * the caller's filters with what became of the records it matched.
+     */
+    private List<? extends CompletionStage<AclDeleteResult>> deleteExactly(AuthorizableRequestContext requestContext,
+            List<List<AclBinding>> matched) {
+        Map<AclBinding, Integer> positions = new LinkedHashMap<>();
+        for (List<AclBinding> records : matched) {
+            for (AclBinding record : records) {
+                positions.putIfAbsent(record, positions.size());
+            }
+        }
+        if (positions.isEmpty()) {
+            return completed(matched.size(), i -> new AclDeleteResult(List.of()));
+        }
+        List<AclBindingFilter> exactly = new ArrayList<>(positions.size());
+        for (AclBinding record : positions.keySet()) {
+            exactly.add(record.toFilter());
+        }
+        List<? extends CompletionStage<AclDeleteResult>> deleted = super.deleteAcls(requestContext, exactly);
+        List<CompletionStage<AclDeleteResult>> results = new ArrayList<>(matched.size());
+        for (List<AclBinding> records : matched) {
+            CompletionStage<List<AclBindingDeleteResult>> ofTheFilter =
+                    CompletableFuture.completedFuture(new ArrayList<>());
+            for (AclBinding record : records) {
+                ofTheFilter = ofTheFilter.thenCombine(deleted.get(positions.get(record)), (all, one) -> {
+                    if (one.exception().isPresent()) {
+                        all.add(new AclBindingDeleteResult(record, one.exception().get()));
+                    } else {
+                        all.addAll(one.aclBindingDeleteResults());
+                    }
+                    return all;
+                });
+            }
+            results.add(ofTheFilter.thenApply(AclDeleteResult::new));
+        }
+        return results;
     }
 
     @Override
@@ -269,10 +409,21 @@ public class RbacAuthorizer extends StandardAuthorizer {
         }
     }
 
-    /** Whether a role grants an action the parent denied, and no deny ACL matches it. */
+    /**
+     * Whether a role grants an action the parent denied, or lets its holder
+     * through to the ACL API, and no deny ACL matches it.
+     */
     private boolean roleAllows(AuthorizableRequestContext requestContext, Action action) {
         try {
-            return roles.grants(principal(requestContext), action)
+            KafkaPrincipal principal = principal(requestContext);
+            boolean granted = roles.grants(principal, action);
+            if (granted) {
+                granted = !keptForSystemAdmin(requestContext, action.operation(),
+                        action.resourcePattern().resourceType()) || bindings.holds(principal, Role.SYSTEM_ADMIN);
+            } else {
+                granted = opensTheAclApi(requestContext, action) && bindings.holds(principal, Role.RESOURCE_OWNER);
+            }
+            return granted
                     && !denied(requestContext, action.operation(), action.resourcePattern(),
                             action.resourceReferenceCount());
         } catch (RuntimeException e) {
@@ -280,6 +431,97 @@ public class RbacAuthorizer extends StandardAuthorizer {
                     action.operation(), action.resourcePattern(), e);
             return false;
         }
+    }
+
+    /**
+     * Whether the action is the broker's check before it lets a request to
+     * the ACL API through: {@code ALTER} on the cluster to create or delete
+     * ACLs, {@code DESCRIBE} on the cluster to list them. A resource owner
+     * passes it, so that it can reach {@link #createAcls} and
+     * {@link #deleteAcls}, where what it may do is decided, and list what it
+     * has bound. The same question with any other request type is not this
+     * check: the role opens the ACL API, not the cluster.
+     */
+    private static boolean opensTheAclApi(AuthorizableRequestContext requestContext, Action action) {
+        ResourcePattern resource = action.resourcePattern();
+        if (resource.resourceType() != ResourceType.CLUSTER || resource.patternType() != PatternType.LITERAL
+                || !Resource.CLUSTER_NAME.equals(resource.name())) {
+            return false;
+        }
+        int request = requestContext.requestType();
+        if (action.operation() == AclOperation.ALTER) {
+            return request == ApiKeys.CREATE_ACLS.id || request == ApiKeys.DELETE_ACLS.id;
+        }
+        return action.operation() == AclOperation.DESCRIBE && request == ApiKeys.DESCRIBE_ACLS.id;
+    }
+
+    /**
+     * Whether the question is one that, of all the roles, only
+     * {@code SystemAdmin} answers: {@code ALTER} on the cluster for a request
+     * that changes who can authenticate, so that a role is not a way to
+     * become a super user. {@code AlterUserScramCredentials} replaces the
+     * password of any user, a super user's included, and the broker guards
+     * it with the same {@code ALTER} on the cluster that lets an operator
+     * move partitions and elect leaders. What an ACL allows is not touched.
+     *
+     * <p>The requests that create and delete ACLs are guarded with it too,
+     * and are not here: {@link #createAcls} and {@link #deleteAcls} decide
+     * them, with a reason for the caller.
+     */
+    private static boolean keptForSystemAdmin(AuthorizableRequestContext requestContext, AclOperation operation,
+            ResourceType resourceType) {
+        return operation == AclOperation.ALTER && resourceType == ResourceType.CLUSTER
+                && requestContext.requestType() == ApiKeys.ALTER_USER_SCRAM_CREDENTIALS.id;
+    }
+
+    /** Who asks, with everything the rules of {@link Delegation} need to know about it. */
+    private Delegation.Caller caller(AuthorizableRequestContext requestContext) {
+        KafkaPrincipal principal = principal(requestContext);
+        return new Delegation.Caller(principal, aclsAllowAlteringTheCluster(requestContext),
+                bindings.heldBy(principal));
+    }
+
+    /**
+     * Whether the ACLs alone, the roles left out, allow the principal
+     * {@code ALTER} on the cluster: the parent's own answer, which is
+     * {@code ALLOWED} for a super user and for whoever an ACL allows and none
+     * denies. Such a principal created and deleted any ACL before there were
+     * roles, and still does.
+     */
+    private boolean aclsAllowAlteringTheCluster(AuthorizableRequestContext requestContext) {
+        Action quiet = new Action(AclOperation.ALTER,
+                new ResourcePattern(ResourceType.CLUSTER, Resource.CLUSTER_NAME, PatternType.LITERAL), 1, false,
+                false);
+        return super.authorize(requestContext, List.of(quiet)).get(0) == AuthorizationResult.ALLOWED;
+    }
+
+    /** The error a caller gets for the record, or the filter, at that position of a refused request. */
+    private static ApiException refusal(Delegation.Decision decision, int position) {
+        Delegation.Answer answer = decision.answers().get(position);
+        Delegation.Outcome outcome = answer.outcome() == Delegation.Outcome.WITH_THE_REQUEST
+                ? decision.refusal().map(Delegation.Answer::outcome).orElse(Delegation.Outcome.FORBIDDEN)
+                : answer.outcome();
+        return outcome == Delegation.Outcome.MALFORMED
+                ? new InvalidRequestException(answer.reason())
+                : new ClusterAuthorizationException(answer.reason());
+    }
+
+    private static String reason(Delegation.Decision decision) {
+        return decision.refusal().map(Delegation.Answer::reason).orElse("refused");
+    }
+
+    /** Never granted on failure: what could not be decided is refused, and says so. */
+    private static ApiException undecided(AuthorizableRequestContext requestContext, String done) {
+        return new ClusterAuthorizationException("Nothing was " + done + ": whether " + requestContext.principal()
+                + " may do this could not be decided, because of an error that is in the controller's log");
+    }
+
+    private static <T> List<CompletableFuture<T>> completed(int size, IntFunction<T> result) {
+        List<CompletableFuture<T>> futures = new ArrayList<>(size);
+        for (int i = 0; i < size; i++) {
+            futures.add(CompletableFuture.completedFuture(result.apply(i)));
+        }
+        return futures;
     }
 
     /**

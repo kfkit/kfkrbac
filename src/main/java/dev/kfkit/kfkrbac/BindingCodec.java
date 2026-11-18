@@ -48,6 +48,12 @@ final class BindingCodec {
     /** In front of the name of a binding for connectors. */
     static final String CONNECTOR_PREFIX = "Connector:";
 
+    /**
+     * In front of the name of a group in a membership record. Reserved: no
+     * binding's name starts with it, on any resource type.
+     */
+    static final String GROUP_PREFIX = "Group:";
+
     /** What an ACL record stands for. */
     sealed interface Decoded permits RoleBinding, Membership, Ordinary, Malformed {
     }
@@ -150,6 +156,10 @@ final class BindingCodec {
         }
         if (resourceName == null || resourceName.isEmpty()) {
             return new Malformed("the name is empty");
+        }
+        if (resourceName.startsWith(GROUP_PREFIX)) {
+            return new Malformed("the name starts with " + GROUP_PREFIX
+                    + ", which is reserved for the groups of membership records");
         }
         RoleBinding.Target elsewhere = resourceName.startsWith(SUBJECT_PREFIX) ? RoleBinding.Target.SUBJECTS
                 : resourceName.startsWith(CONNECTOR_PREFIX) ? RoleBinding.Target.CONNECTORS

@@ -30,6 +30,7 @@ import static org.apache.kafka.common.resource.ResourceType.USER;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.stream.Stream;
 
@@ -153,7 +154,13 @@ class BindingCodecTest {
                 Arguments.of("connectors on a transactional ID record",
                         binding("DeveloperRead:User:alice", TRANSACTIONAL_ID, "Connector:billing-", PREFIXED)),
                 Arguments.of("subjects without a name",
-                        binding("DeveloperRead:User:alice", TOPIC, "Subject:", PREFIXED)));
+                        binding("DeveloperRead:User:alice", TOPIC, "Subject:", PREFIXED)),
+                Arguments.of("a name reserved for a group",
+                        binding("DeveloperRead:User:alice", TOPIC, "Group:payments", LITERAL)),
+                Arguments.of("a prefix reserved for groups",
+                        binding("ResourceOwner:User:alice", TOPIC, "Group:", PREFIXED)),
+                Arguments.of("a name reserved for a group on a group record",
+                        binding("DeveloperRead:User:alice", GROUP, "Group:payments", LITERAL)));
     }
 
     @ParameterizedTest(name = "{0}")
@@ -162,6 +169,17 @@ class BindingCodecTest {
         BindingCodec.Malformed malformed = assertInstanceOf(BindingCodec.Malformed.class,
                 BindingCodec.decode(record));
         assertFalse(malformed.reason().isBlank());
+    }
+
+    @Test
+    void aNameThatStartsWithGroupIsReservedAndSaysSo() {
+        BindingCodec.Malformed reserved = assertInstanceOf(BindingCodec.Malformed.class,
+                BindingCodec.decode(binding("DeveloperRead:User:alice", TOPIC, "Group:payments", LITERAL)));
+        assertTrue(reserved.reason().contains("Group:"), reserved.reason());
+
+        // Without the colon it is a name like any other, as with Subject and Connector.
+        assertEquals(new RoleBinding(Role.DEVELOPER_READ, ALICE, RoleBinding.Target.NAMES, "Group", PREFIXED),
+                BindingCodec.decode(binding("DeveloperRead:User:alice", TOPIC, "Group", PREFIXED)));
     }
 
     // --- the two shapes ----------------------------------------------------------

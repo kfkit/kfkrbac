@@ -56,6 +56,12 @@ answers them there from the same bindings.
 - `ClusterAdmin`: an operator who runs the cluster: brokers' configuration,
   topics everywhere, schemas and connectors, without reading or writing the
   data in topics.
+  `ClusterAdmin` does not manage access. It creates and deletes no ACL, no
+  role binding and no group membership, and its `Alter` on the cluster does
+  not let it replace a user's SCRAM credentials: those take `SystemAdmin`, a
+  super user, or an ACL that allows `Alter` on the cluster. It can change
+  the brokers' configuration, how clients authenticate included: bind it
+  only to those you trust with the cluster.
 - `SystemAdmin`: everything, everywhere, including binding any role to
   anyone.
 
