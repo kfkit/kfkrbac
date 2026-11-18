@@ -8,8 +8,9 @@ A role's meaning never changes once it is released: a different set of
 permissions gets a different name. Operators do not define roles of their
 own; a group that ordinary ACLs name does that job.
 
-> Status: the roles exist in code, but bindings are not read yet, so no role
-> grants anything on a broker today. The examples below are as designed.
+> Status: the authorizer reads bindings from ACL records and decides with
+> them, but it has not run on a broker yet, and nothing answers for subjects
+> and connectors. The examples below are as designed.
 
 ## What each role grants
 
@@ -84,6 +85,15 @@ kafka-acls.sh --bootstrap-server localhost:9092 --add \
 A consumer whose group does not start with the prefix of its topics needs a
 second binding, on the group: give its groups the same prefix and it needs
 one.
+
+## A record that is not a binding
+
+A record whose principal type is a role, but which is not a binding as
+above, grants nothing: an operation other than `All`, a `Deny`, a host other
+than `*`, a cluster role on a name pattern or a pattern role on the cluster,
+a member that is not `Type:name`. The authorizer logs it once, at `WARN`,
+with the ID of the record, and counts such records in the gauge
+`malformed-bindings` of its plugin metrics for as long as they exist.
 
 ## Reserved names
 
