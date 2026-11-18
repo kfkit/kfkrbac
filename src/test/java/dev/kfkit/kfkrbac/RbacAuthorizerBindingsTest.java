@@ -363,11 +363,12 @@ class RbacAuthorizerBindingsTest {
     void recordsThatBindNothingToThePrincipalGrantNothingAndAreNotMalformed() {
         start();
 
-        // A role that does not exist, a group membership, a binding of a group, and a
-        // member that is a wildcard to an ACL and one more name to a binding.
+        // A role that does not exist, a membership of a group that holds nothing, a binding of a
+        // group the principal is not in, and a member that is a wildcard to an ACL and one more
+        // name to a binding.
         String log = stderrOf(() -> {
             authorizer.addAcl(Uuid.randomUuid(), binding("DeveloperDelete:User:alice", BILLING));
-            authorizer.addAcl(Uuid.randomUuid(), binding("Member:User:alice", literal(TOPIC, "Group:payments")));
+            authorizer.addAcl(Uuid.randomUuid(), binding("Member:User:alice", literal(TOPIC, "Group:invoicing")));
             authorizer.addAcl(Uuid.randomUuid(), binding("DeveloperRead:Group:payments", BILLING));
             authorizer.addAcl(Uuid.randomUuid(), binding("DeveloperRead:User:*", BILLING));
         });

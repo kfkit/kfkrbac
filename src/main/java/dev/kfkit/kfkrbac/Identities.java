@@ -20,8 +20,13 @@ import java.util.List;
 import org.apache.kafka.common.security.auth.KafkaPrincipal;
 
 /**
- * The identities a principal holds bindings under: itself and, once group
- * membership is read, the groups it is a member of.
+ * The identities a principal holds bindings under: itself and the groups it
+ * is a member of.
+ *
+ * <p>This is the one place that says which groups a principal is in. On a
+ * broker it is {@link Memberships}, the groups that membership records make;
+ * groups that the principal itself carries would be added here, and nothing
+ * that asks would change.
  *
  * <p>Asked on the broker's request path: in memory, no I/O, no blocking.
  */
@@ -32,7 +37,8 @@ interface Identities {
 
     /**
      * The members a binding may name for it to apply to the principal, the
-     * principal itself among them.
+     * principal itself among them, and the principals an ACL of a group may
+     * name for it to apply. A group may be there more than once.
      *
      * @param principal the principal of the request, a plain {@link KafkaPrincipal}
      */

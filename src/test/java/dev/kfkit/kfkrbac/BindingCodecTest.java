@@ -107,12 +107,87 @@ class BindingCodecTest {
                 BindingCodec.decode(binding(principal, TOPIC, "billing.", PREFIXED)));
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"Group:payments", "Group:*", "Group:a:b"})
+    void anAllowAclOfAGroupIsAnOrdinaryAcl(String principal) {
+        for (AclOperation operation : new AclOperation[] {READ, ALL}) {
+            assertInstanceOf(BindingCodec.Ordinary.class,
+                    BindingCodec.decode(acl(principal, TOPIC, "reports", LITERAL, "127.0.0.1", operation, ALLOW)));
+        }
+    }
+
+    // --- group membership ---------------------------------------------------------
+
     @Test
-    void aMemberRecordIsGroupMembershipWhateverElseItSays() {
-        assertInstanceOf(BindingCodec.Membership.class,
+    void aMemberRecordPutsItsMemberInTheGroupItNames() {
+        assertEquals(new BindingCodec.Membership(ALICE, new KafkaPrincipal("Group", "payments")),
                 BindingCodec.decode(binding("Member:User:alice", TOPIC, "Group:payments", LITERAL)));
-        assertInstanceOf(BindingCodec.Membership.class, BindingCodec.decode(
-                new StandardAcl(GROUP, "billing.", PREFIXED, "Member:alice", "127.0.0.1", READ, DENY)));
+        assertEquals(new BindingCodec.Membership(new KafkaPrincipal("User", "CN=alice:1"),
+                new KafkaPrincipal("Group", "eu:payments")),
+                BindingCodec.decode(binding("Member:User:CN=alice:1", TOPIC, "Group:eu:payments", LITERAL)));
+    }
+
+    static Stream<Arguments> malformedMemberships() {
+        return Stream.of(
+                Arguments.of("operation not ALL",
+                        acl("Member:User:alice", TOPIC, "Group:payments", LITERAL, "*", READ, ALLOW)),
+                Arguments.of("permission DENY",
+                        acl("Member:User:alice", TOPIC, "Group:payments", LITERAL, "*", ALL, DENY)),
+                Arguments.of("host not *",
+                        acl("Member:User:alice", TOPIC, "Group:payments", LITERAL, "127.0.0.1", ALL, ALLOW)),
+                Arguments.of("a group as the member",
+                        binding("Member:Group:billing", TOPIC, "Group:payments", LITERAL)),
+                Arguments.of("a member without a type",
+                        binding("Member:alice", TOPIC, "Group:payments", LITERAL)),
+                Arguments.of("a member without a name",
+                        binding("Member:User:", TOPIC, "Group:payments", LITERAL)),
+                Arguments.of("no member",
+                        binding("Member:", TOPIC, "Group:payments", LITERAL)),
+                Arguments.of("a name that is not a group",
+                        binding("Member:User:alice", TOPIC, "payments", LITERAL)),
+                Arguments.of("a group in another case",
+                        binding("Member:User:alice", TOPIC, "group:payments", LITERAL)),
+                Arguments.of("a group without a name",
+                        binding("Member:User:alice", TOPIC, "Group:", LITERAL)),
+                Arguments.of("an empty name",
+                        binding("Member:User:alice", TOPIC, "", LITERAL)),
+                Arguments.of("a prefix of groups",
+                        binding("Member:User:alice", TOPIC, "Group:pay", PREFIXED)),
+                Arguments.of("a pattern type no record has",
+                        binding("Member:User:alice", TOPIC, "Group:payments", PatternType.MATCH)),
+                Arguments.of("a group record",
+                        binding("Member:User:alice", GROUP, "Group:payments", LITERAL)),
+                Arguments.of("the cluster",
+                        binding("Member:User:alice", CLUSTER, "kafka-cluster", LITERAL)));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("malformedMemberships")
+    void aMemberRecordThatTheFormatDoesNotAllowIsMalformed(String shape, StandardAcl record) {
+        BindingCodec.Malformed malformed = assertInstanceOf(BindingCodec.Malformed.class,
+                BindingCodec.decode(record));
+        assertEquals(BindingCodec.Malformed.Kind.MEMBERSHIP, malformed.kind());
+        assertFalse(malformed.reason().isBlank());
+    }
+
+    @Test
+    void aGroupIsNotAMemberOfAGroupAndTheRecordSaysSo() {
+        BindingCodec.Malformed nested = assertInstanceOf(BindingCodec.Malformed.class,
+                BindingCodec.decode(binding("Member:Group:billing", TOPIC, "Group:payments", LITERAL)));
+        assertEquals("the member is a group, and a group is not a member of a group", nested.reason());
+    }
+
+    @Test
+    void aDenyAclOfAGroupIsMalformedAndOfAUserIsNot() {
+        BindingCodec.Malformed deny = assertInstanceOf(BindingCodec.Malformed.class,
+                BindingCodec.decode(acl("Group:payments", TOPIC, "reports", LITERAL, "*", READ, DENY)));
+        assertEquals(BindingCodec.Malformed.Kind.GROUP_DENY, deny.kind());
+        assertTrue(deny.reason().contains("deny the users by name"), deny.reason());
+
+        assertInstanceOf(BindingCodec.Ordinary.class,
+                BindingCodec.decode(acl("User:alice", TOPIC, "reports", LITERAL, "*", READ, DENY)));
+        assertInstanceOf(BindingCodec.Ordinary.class,
+                BindingCodec.decode(acl("Groups:payments", TOPIC, "reports", LITERAL, "*", READ, DENY)));
     }
 
     static Stream<Arguments> malformed() {
@@ -168,6 +243,7 @@ class BindingCodecTest {
     void aRecordOfARoleThatTheFormatDoesNotAllowIsMalformed(String shape, StandardAcl record) {
         BindingCodec.Malformed malformed = assertInstanceOf(BindingCodec.Malformed.class,
                 BindingCodec.decode(record));
+        assertEquals(BindingCodec.Malformed.Kind.BINDING, malformed.kind());
         assertFalse(malformed.reason().isBlank());
     }
 
@@ -186,7 +262,8 @@ class BindingCodecTest {
 
     static Stream<StandardAcl> records() {
         // A pattern of type MATCH is a filter: no client can list a record that has it.
-        Stream<StandardAcl> malformed = malformed().map(arguments -> (StandardAcl) arguments.get()[1])
+        Stream<StandardAcl> malformed = Stream.concat(malformed(), malformedMemberships())
+                .map(arguments -> (StandardAcl) arguments.get()[1])
                 .filter(record -> record.patternType() != PatternType.MATCH);
         return Stream.concat(malformed, Stream.of(
                 binding("DeveloperWrite:User:alice", TOPIC, "billing.", PREFIXED),
@@ -194,6 +271,8 @@ class BindingCodecTest {
                 binding("SystemAdmin:Group:payments", CLUSTER, "kafka-cluster", LITERAL),
                 binding("ResourceOwner:User:alice", TOPIC, "Subject:orders-", PREFIXED),
                 binding("Member:User:alice", TOPIC, "Group:payments", LITERAL),
+                acl("Group:payments", TOPIC, "reports", LITERAL, "*", READ, ALLOW),
+                acl("Group:payments", TOPIC, "reports", LITERAL, "*", READ, DENY),
                 acl("User:alice", TOPIC, "orders", LITERAL, "*", READ, ALLOW)));
     }
 

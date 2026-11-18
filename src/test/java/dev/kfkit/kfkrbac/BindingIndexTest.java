@@ -56,14 +56,51 @@ class BindingIndexTest {
     }
 
     @Test
-    void aPrincipalIsOnlyItselfUntilGroupsAreRead() {
+    void aPrincipalIsAlsoTheGroupsThatMembershipRecordsPutItIn() {
         BindingIndex index = new BindingIndex();
+        KafkaPrincipal bob = new KafkaPrincipal("User", "bob");
         index.add(Uuid.randomUuid(), binding("DeveloperRead:Group:payments", "billing."));
-        index.add(Uuid.randomUuid(), new StandardAcl(ResourceType.TOPIC, "Group:payments", PatternType.LITERAL,
-                "Member:User:alice", "*", AclOperation.ALL, AclPermissionType.ALLOW));
+        assertFalse(index.grants(ALICE, read("billing.invoices")));
+
+        Uuid membership = Uuid.randomUuid();
+        index.add(membership, member("User:alice", "Group:payments"));
+
+        assertTrue(index.grants(ALICE, read("billing.invoices")));
+        assertEquals(List.of(BILLING), index.grantedPatterns(ALICE, AclOperation.READ, ResourceType.TOPIC));
+        assertTrue(index.holds(ALICE, Role.DEVELOPER_READ));
+        assertEquals(1, index.heldBy(ALICE).size());
+        assertFalse(index.grants(bob, read("billing.invoices")));
+        assertEquals(List.of(), index.grantedPatterns(bob, AclOperation.READ, ResourceType.TOPIC));
+        assertFalse(index.holds(bob, Role.DEVELOPER_READ));
+        assertEquals(0, index.malformed());
+
+        index.remove(membership);
+        assertFalse(index.grants(ALICE, read("billing.invoices")));
+        assertEquals(List.of(), index.heldBy(ALICE));
+    }
+
+    @Test
+    void theIdentitiesGivenDecideWhateverTheMembershipRecordsSay() {
+        BindingIndex index = new BindingIndex(Identities.SELF);
+        index.add(Uuid.randomUuid(), binding("DeveloperRead:Group:payments", "billing."));
+        index.add(Uuid.randomUuid(), member("User:alice", "Group:payments"));
 
         assertFalse(index.grants(ALICE, read("billing.invoices")));
-        assertEquals(List.of(), index.grantedPatterns(ALICE, AclOperation.READ, ResourceType.TOPIC));
+        assertEquals(0, index.malformed());
+    }
+
+    @Test
+    void aMembershipThatTheFormatDoesNotAllowPutsNobodyInAGroupAndIsCounted() {
+        BindingIndex index = new BindingIndex();
+        index.add(Uuid.randomUuid(), binding("DeveloperRead:Group:payments", "billing."));
+        Uuid nested = Uuid.randomUuid();
+        index.add(nested, member("Group:billing", "Group:payments"));
+        index.add(Uuid.randomUuid(), member("User:alice", "Group:billing"));
+
+        assertFalse(index.grants(ALICE, read("billing.invoices")));
+        assertEquals(1, index.malformed());
+
+        index.remove(nested);
         assertEquals(0, index.malformed());
     }
 
@@ -137,6 +174,11 @@ class BindingIndexTest {
     private static Action read(String topic) {
         return new Action(AclOperation.READ, new ResourcePattern(ResourceType.TOPIC, topic, PatternType.LITERAL), 1,
                 true, true);
+    }
+
+    private static StandardAcl member(String member, String group) {
+        return new StandardAcl(ResourceType.TOPIC, group, PatternType.LITERAL, "Member:" + member, "*",
+                AclOperation.ALL, AclPermissionType.ALLOW);
     }
 
     private static StandardAcl binding(String principal, String prefix) {
