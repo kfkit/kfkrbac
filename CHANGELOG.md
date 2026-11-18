@@ -84,6 +84,13 @@ major version is 0.
   `META-INF/LICENSE` and `META-INF/NOTICE`. It has no dependency and can be
   in `libs/` next to kfkwho's own jar. The build takes kfkwho from its
   GitHub release and checks its SHA-256.
+- Operator documentation for what exists: [docs/install.md](docs/install.md),
+  [docs/bindings.md](docs/bindings.md) and
+  [docs/delegation.md](docs/delegation.md). Their shell commands are run
+  against a real broker by `DocsIT`, in the integration suite, and the output
+  they show is compared with what the commands print.
+- `./gradlew check` fails when a relative link in `README.md` or `docs/`
+  points at a file that does not exist.
 - A release workflow: a `vX.Y.Z` tag runs the whole check and publishes a
   GitHub Release with the jar, its SHA-256, a keyless cosign signature and a
   build provenance attestation. How to verify a released jar is in
