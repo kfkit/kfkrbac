@@ -7,8 +7,8 @@ was missing.
 
 > Status: the extension is built, its filter is tested request by request,
 > and the integration tests run it in two Connect workers of Kafka 4.1.2,
-> 4.2.2, 4.3.1 and 4.4.0 with basic authentication, forwarding between
-> them included. Mutual TLS has not run in a real worker yet.
+> 4.2.2, 4.3.1 and 4.4.0, with basic authentication and with mutual TLS,
+> forwarding between them included.
 
 ## Installation
 
@@ -140,7 +140,31 @@ basic authentication the user's credentials go along, and the leader decides
 the request as the user again. With mutual TLS the leader sees the
 certificate of the worker that forwarded the request: the request was
 decided where it arrived, and the workers' own principal has to be in
-`kfkrbac.super.users` for the leader to let it through.
+`kfkrbac.super.users` for the leader to let it through. Otherwise the
+leader refuses it, naming the worker:
+
+```json
+{"error_code":403,"message":"kfkrbac: User:CN=connect-1,O=example may not Create connector billing-sink: no role bound to it grants Create on that connector"}
+```
+
+A worker presents to the leader the certificate of its own key store,
+`listeners.https.ssl.keystore.*`. A sketch of a worker's settings for mutual TLS, with every worker's subject
+a super user:
+
+```properties
+listeners=https://0.0.0.0:8443
+rest.advertised.listener=https
+listeners.https.ssl.keystore.location=/etc/connect/connect-1.p12
+listeners.https.ssl.keystore.password=<password>
+listeners.https.ssl.truststore.location=/etc/connect/truststore.p12
+listeners.https.ssl.truststore.password=<password>
+listeners.https.ssl.client.auth=required
+rest.extension.classes=dev.kfkit.kfkrbac.connect.RbacConnectRestExtension
+kfkrbac.super.users=User:CN=connect-1,O=example;User:CN=connect-2,O=example
+```
+
+With `ssl.client.auth=requested` instead of `required`, a caller without a
+certificate reaches the extension and is refused with 401.
 
 ## What it does not cover
 
