@@ -368,3 +368,11 @@ publishing {
         }
     }
 }
+
+// Maven Central gets the jar of the GitHub release, the one the release
+// workflow built and signed, with this POM, the sources and the javadoc next
+// to it. Gradle's module metadata would name the size and hashes of a jar
+// built here instead, so it is not published; the POM is all there is.
+tasks.withType<GenerateModuleMetadata>().configureEach {
+    enabled = false
+}

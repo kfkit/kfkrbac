@@ -4,14 +4,15 @@ Role-based access control for Apache Kafka®: an authorizer that grants access
 through roles and role bindings, on top of the ACLs the broker already has.
 One jar, one line of configuration, free and open source.
 
-> Status: 0.1.0, the first release. Everything on this page exists: the
+> Status: 0.1.1. Everything on this page exists: the
 > authorizer for the brokers and controllers, groups, the command, the
 > extension for Kafka Connect and the access metrics. The jar runs as the
 > authorizer of real brokers of Kafka 4.1 to 4.4 in the integration tests,
 > and the commands of the documentation are run there too; nothing has run
 > on a production cluster yet. What is not there is said
 > [below](#what-is-not-there). The jar, its SHA-256 and its signature are on
-> the [releases page](https://github.com/kfkit/kfkrbac/releases). Until 1.0
+> the [releases page](https://github.com/kfkit/kfkrbac/releases), and the
+> same jar is on Maven Central as `dev.kfkit:kfkrbac`. Until 1.0
 > a setting, a record or a role may still change, and every such change is
 > listed in the [changelog](CHANGELOG.md).
 
@@ -151,9 +152,6 @@ Leave the setting at its default, `false`, to use roles.
   kfkwho's names, for what is built on those. kfkrbac's own metrics are
   three gauges, in [Bindings](docs/bindings.md#a-record-that-is-not-a-binding)
   and [Kafka Connect](docs/connect.md#before-the-bindings-are-read-and-when-they-cannot-be).
-- **Not on Maven Central yet.** A release is a signed jar on the releases
-  page of this repository; `./gradlew publishToMavenLocal` makes the
-  artifacts Maven Central asks for.
 - **No roles of your own.** There are the seven. A set of permissions that
   none of them names is given with ordinary ACLs to a
   [group](docs/groups.md#an-acl-for-a-group).
