@@ -62,6 +62,25 @@ record Answer(String request, AuthorizationException refusal) {
         }
     }
 
+    /** Whether the request was refused and the reason the cluster gave has that text in it. */
+    boolean refusedSaying(String text) {
+        return refusal != null && refusal.getMessage() != null && refusal.getMessage().contains(text);
+    }
+
+    /**
+     * Fails unless the request was refused with that exception and the
+     * reason the cluster gave has each of the texts in it.
+     */
+    void assertRefusedSaying(Class<? extends AuthorizationException> with, String why, String... texts) {
+        assertRefused(with, why);
+        for (String text : texts) {
+            if (!refusedSaying(text)) {
+                throw new AssertionError("expected " + request + " to be refused with a reason that says \"" + text
+                        + "\", " + why + "; the cluster answered: " + this, refusal);
+            }
+        }
+    }
+
     @Override
     public String toString() {
         return allowed()
