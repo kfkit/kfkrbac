@@ -4,10 +4,12 @@ Role-based access control for Apache Kafka®: an authorizer that grants access
 through roles and role bindings, on top of the ACLs the broker already has.
 One jar, one line of configuration, free and open source.
 
-> Status: pre-alpha, not released. The authorizer can tell a deny ACL from
-> no ACL and lets a role grant only the second, but no roles can be defined
-> or bound yet, so it behaves exactly like `StandardAuthorizer`. What is
-> described below is the design, not something you can install.
+> Status: pre-alpha, not released. The authorizer reads role bindings from
+> ACL records and decides with them, in unit tests against the real
+> `StandardAuthorizer`; it has not run on a broker. Who may bind what is not
+> enforced yet: whoever may create ACLs may create a binding. Groups, the
+> command and the extensions for schemas and connectors do not exist. What
+> is described below is the design, not something you can install.
 
 ## Why
 
@@ -65,8 +67,9 @@ ACLs first, and then yes when a role covers some resource that no deny ACL
 of the principal covers entirely.
 
 With `allow.everyone.if.no.acl.found=true` the ACLs already allow whatever
-no ACL names, so roles add nothing there. Leave it at its default, `false`,
-to use roles.
+no ACL names. A binding is an ACL record and names its pattern, so there the
+first binding on a pattern takes away what everyone had on it by default.
+Leave the setting at its default, `false`, to use roles.
 
 ## Installation, as designed
 

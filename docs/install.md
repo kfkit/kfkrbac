@@ -1,8 +1,8 @@
 # Installation
 
-> There is no release yet, and no role can be bound yet: today the
-> authorizer behaves exactly like `StandardAuthorizer`. This page says how
-> the jar is installed once it is released.
+> There is no release yet, and the authorizer has not run on a broker; see
+> the status in the [README](../README.md). This page says how the jar is
+> installed once it is released.
 
 kfkrbac is one jar and one line of configuration, on every node of the
 cluster, controllers included:

@@ -19,6 +19,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -28,7 +29,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.acl.AclOperation;
 import org.apache.kafka.common.acl.AclPermissionType;
+import org.apache.kafka.common.metrics.Gauge;
 import org.apache.kafka.common.metrics.Metrics;
+import org.apache.kafka.common.metrics.PluginMetrics;
 import org.apache.kafka.common.metrics.internals.PluginMetricsImpl;
 import org.apache.kafka.common.resource.PatternType;
 import org.apache.kafka.common.resource.ResourcePattern;
@@ -49,6 +52,11 @@ import org.slf4j.LoggerFactory;
  * user or a group. Roles only ever add access: what an ACL allows stays
  * allowed, what an ACL denies stays denied, and a request no ACL allows is
  * allowed when a role bound to its principal covers it.
+ *
+ * <p>A role binding is an ACL record whose principal is
+ * {@code <Role>:<member>}. The broker delivers it like any ACL; the parent
+ * stores it and never matches it, and {@link BindingIndex} keeps it as a
+ * binding.
  *
  * <p>Extending rather than wrapping is deliberate. The broker feeds ACLs
  * only to authorizers that are a {@code ClusterMetadataAuthorizer}; a plain
@@ -90,7 +98,14 @@ public class RbacAuthorizer extends StandardAuthorizer {
      */
     private static final Map<Uuid, StandardAcl> ALLOW_EVERYTHING = allowEverything();
 
+    /** The name of the gauge that counts the records which look like bindings and are not. */
+    static final String MALFORMED_BINDINGS_METRIC = "malformed-bindings";
+
+    /** What decides for the roles: {@link #bindings} on a broker. */
     private final Roles roles;
+
+    /** The role bindings among the ACL records the broker delivers. */
+    private final BindingIndex bindings;
 
     /** The deny ACLs of the parent and {@link #ALLOW_EVERYTHING}: denies exactly when a deny ACL matches. */
     private final StandardAuthorizer denies = new StandardAuthorizer();
@@ -102,11 +117,21 @@ public class RbacAuthorizer extends StandardAuthorizer {
     private final Metrics denyMetrics = new Metrics();
 
     public RbacAuthorizer() {
-        this(Roles.NONE);
+        this(new BindingIndex());
     }
 
+    private RbacAuthorizer(BindingIndex bindings) {
+        this(bindings, bindings);
+    }
+
+    /** For tests: the roles decide as given, whatever the ACL records bind. */
     RbacAuthorizer(Roles roles) {
+        this(roles, new BindingIndex());
+    }
+
+    private RbacAuthorizer(Roles roles, BindingIndex bindings) {
         this.roles = Objects.requireNonNull(roles, "roles");
+        this.bindings = bindings;
         denies.withPluginMetrics(new PluginMetricsImpl(denyMetrics, Map.of()));
         denies.loadSnapshot(ALLOW_EVERYTHING);
     }
@@ -121,6 +146,15 @@ public class RbacAuthorizer extends StandardAuthorizer {
     }
 
     @Override
+    public void withPluginMetrics(PluginMetrics metrics) {
+        super.withPluginMetrics(metrics);
+        Gauge<Integer> malformed = (config, now) -> bindings.malformed();
+        metrics.addMetric(metrics.metricName(MALFORMED_BINDINGS_METRIC,
+                "ACL records with a role as their principal type that are not role bindings and grant nothing.",
+                new LinkedHashMap<>()), malformed);
+    }
+
+    @Override
     public void completeInitialLoad() {
         denies.completeInitialLoad();
         super.completeInitialLoad();
@@ -129,6 +163,7 @@ public class RbacAuthorizer extends StandardAuthorizer {
     // The order of the updates below keeps a deny ACL in the private authorizer
     // for as long as the parent has it: between the two updates a request may see
     // a deny that is not there yet or no longer there, never miss one that is.
+    // The bindings follow the parent: a record it refuses is not read as a binding.
 
     @Override
     public void addAcl(Uuid id, StandardAcl acl) {
@@ -137,11 +172,13 @@ public class RbacAuthorizer extends StandardAuthorizer {
             denyAcls.put(id, acl);
         }
         super.addAcl(id, acl);
+        bindings.add(id, acl);
     }
 
     @Override
     public void removeAcl(Uuid id) {
         super.removeAcl(id);
+        bindings.remove(id);
         if (denyAcls.remove(id) != null) {
             denies.removeAcl(id);
         }
@@ -165,6 +202,7 @@ public class RbacAuthorizer extends StandardAuthorizer {
         });
         denies.loadSnapshot(withAllowEverything(both));
         super.loadSnapshot(acls);
+        bindings.load(acls);
         denies.loadSnapshot(withAllowEverything(newDenies));
         denyAcls.clear();
         denyAcls.putAll(newDenies);

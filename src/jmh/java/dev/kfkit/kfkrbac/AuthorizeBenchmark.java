@@ -17,7 +17,6 @@ package dev.kfkit.kfkrbac;
 
 import java.io.IOException;
 import java.net.InetAddress;
-import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -40,6 +39,7 @@ import org.apache.kafka.server.authorizer.AuthorizableRequestContext;
 import org.apache.kafka.server.authorizer.AuthorizationResult;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.Level;
+import org.openjdk.jmh.annotations.Param;
 import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
@@ -47,12 +47,18 @@ import org.openjdk.jmh.annotations.TearDown;
 
 /**
  * The cost of one {@code authorize} call for one Fetch of one topic, among
- * 1000 allow ACLs and 100 deny ACLs of other principals.
+ * 1000 allow ACLs and 200 deny ACLs of other principals, and as many role
+ * bindings in the cluster as {@link #bindings} says.
  *
- * <p>{@code alice} is allowed by an ACL, {@code bob} by a role, {@code carol}
- * holds the same role and is denied by an ACL, {@code dave} has nothing and
- * is denied by default. {@code parentAllowedByAcl} is the broker's own
- * {@link StandardAuthorizer} answering {@code alice}: what an ACL-allowed
+ * <p>{@code alice} is allowed by an ACL. {@code bob} holds
+ * {@code DeveloperRead} on the prefix {@code billing.}: he is allowed
+ * {@code billing.invoices} by that role and denied what starts with
+ * {@code billing.payroll.} by an ACL, which is found, as the denies of a
+ * hundred others on each of the two prefixes are passed over. {@code dave}
+ * has nothing and is denied by default. The other bindings are those of a
+ * thousand applications, each on prefixes of its own.
+ * {@code parentAllowedByAcl} is the broker's own {@link StandardAuthorizer}
+ * holding the same records and answering {@code alice}: what an ACL-allowed
  * request costs without roles.
  */
 @State(Scope.Benchmark)
@@ -62,12 +68,17 @@ public class AuthorizeBenchmark {
             new ResourcePattern(ResourceType.TOPIC, "billing.invoices", PatternType.LITERAL);
     private static final List<Action> READ_INVOICES =
             List.of(new Action(AclOperation.READ, INVOICES, 1, true, true));
+    private static final List<Action> READ_PAYROLL = List.of(new Action(AclOperation.READ,
+            new ResourcePattern(ResourceType.TOPIC, "billing.payroll.2026", PatternType.LITERAL), 1, true, true));
+
+    /** The role bindings in the cluster, the one of {@code bob} among them. */
+    @Param({"1", "100", "10000"})
+    public int bindings;
 
     private StandardAuthorizer parent;
     private RbacAuthorizer rbac;
     private final AuthorizableRequestContext alice = context("alice");
     private final AuthorizableRequestContext bob = context("bob");
-    private final AuthorizableRequestContext carol = context("carol");
     private final AuthorizableRequestContext dave = context("dave");
 
     @Setup(Level.Trial)
@@ -80,13 +91,21 @@ public class AuthorizeBenchmark {
         for (int i = 0; i < 100; i++) {
             acls.put(Uuid.randomUuid(), acl("User:app-" + i, "billing.", PatternType.PREFIXED,
                     AclPermissionType.DENY));
+            acls.put(Uuid.randomUuid(), acl("User:app-" + i, "billing.payroll.", PatternType.PREFIXED,
+                    AclPermissionType.DENY));
         }
         acls.put(Uuid.randomUuid(), acl("User:alice", "billing.invoices", PatternType.LITERAL,
                 AclPermissionType.ALLOW));
-        acls.put(Uuid.randomUuid(), acl("User:carol", "billing.", PatternType.PREFIXED, AclPermissionType.DENY));
+        acls.put(Uuid.randomUuid(), acl("User:bob", "billing.payroll.", PatternType.PREFIXED,
+                AclPermissionType.DENY));
+
+        acls.put(Uuid.randomUuid(), binding("DeveloperRead:User:bob", "billing."));
+        for (int i = 1; i < bindings; i++) {
+            acls.put(Uuid.randomUuid(), binding("DeveloperRead:User:app-" + i % 1000, "team-" + i + "."));
+        }
 
         parent = start(new StandardAuthorizer(), acls);
-        rbac = start(new RbacAuthorizer(new BillingReaders()), acls);
+        rbac = start(new RbacAuthorizer(), acls);
     }
 
     @TearDown(Level.Trial)
@@ -112,7 +131,7 @@ public class AuthorizeBenchmark {
 
     @Benchmark
     public AuthorizationResult deniedByAcl() {
-        return rbac.authorize(carol, READ_INVOICES).get(0);
+        return rbac.authorize(bob, READ_PAYROLL).get(0);
     }
 
     @Benchmark
@@ -131,6 +150,11 @@ public class AuthorizeBenchmark {
     private static StandardAcl acl(String principal, String name, PatternType patternType,
             AclPermissionType permission) {
         return new StandardAcl(ResourceType.TOPIC, name, patternType, principal, "*", AclOperation.READ, permission);
+    }
+
+    private static StandardAcl binding(String roleAndMember, String prefix) {
+        return new StandardAcl(ResourceType.TOPIC, prefix, PatternType.PREFIXED, roleAndMember, "*", AclOperation.ALL,
+                AclPermissionType.ALLOW);
     }
 
     private static AuthorizableRequestContext context(String user) {
@@ -177,28 +201,5 @@ public class AuthorizeBenchmark {
                 return 0;
             }
         };
-    }
-
-    /** {@code bob} and {@code carol} may read the topics starting with {@code billing.}. */
-    private static final class BillingReaders implements Roles {
-        private static final KafkaPrincipal BOB = new KafkaPrincipal(KafkaPrincipal.USER_TYPE, "bob");
-        private static final KafkaPrincipal CAROL = new KafkaPrincipal(KafkaPrincipal.USER_TYPE, "carol");
-        private static final ResourcePattern BILLING =
-                new ResourcePattern(ResourceType.TOPIC, "billing.", PatternType.PREFIXED);
-
-        @Override
-        public boolean grants(KafkaPrincipal principal, Action action) {
-            return (principal.equals(BOB) || principal.equals(CAROL))
-                    && action.operation() == AclOperation.READ
-                    && action.resourcePattern().resourceType() == ResourceType.TOPIC
-                    && action.resourcePattern().name().startsWith(BILLING.name());
-        }
-
-        @Override
-        public Collection<ResourcePattern> grantedPatterns(KafkaPrincipal principal, AclOperation operation,
-                ResourceType resourceType) {
-            return (principal.equals(BOB) || principal.equals(CAROL)) && operation == AclOperation.READ
-                    && resourceType == ResourceType.TOPIC ? List.of(BILLING) : List.of();
-        }
     }
 }
