@@ -77,12 +77,23 @@ final class Delegation {
      *        it {@code ALTER} on the cluster: it is in {@code super.users},
      *        or an ACL allows it and none denies it
      * @param held every binding that applies to it, its groups' included
+     * @param alteringGroup a group of the principal that an {@code ALLOW}
+     *        ACL allows {@code ALTER} on the cluster, when the ACLs alone do
+     *        not allow it the principal, or {@code null}: such an ACL lets
+     *        the member through the broker's check, and makes it no manager
+     *        of access, which a reason then says
      */
-    record Caller(KafkaPrincipal principal, boolean allowedByAcls, List<RoleBinding> held) {
+    record Caller(KafkaPrincipal principal, boolean allowedByAcls, List<RoleBinding> held,
+            KafkaPrincipal alteringGroup) {
 
         Caller {
             Objects.requireNonNull(principal, "principal");
             held = List.copyOf(held);
+        }
+
+        /** One that no ACL of a group allows {@code ALTER} on the cluster. */
+        Caller(KafkaPrincipal principal, boolean allowedByAcls, List<RoleBinding> held) {
+            this(principal, allowedByAcls, held, null);
         }
 
         /**
@@ -204,7 +215,7 @@ final class Delegation {
         for (Collection<AclBinding> records : matched) {
             if (nothing) {
                 answers.add(new Answer(Outcome.FORBIDDEN, caller.principal() + " may not delete ACLs or role bindings: "
-                        + whyNobody(caller)));
+                        + whyNobody(caller) + (caller.alteringGroup() == null ? "" : notByAGroup(caller))));
                 continue;
             }
             String first = null;
@@ -279,6 +290,11 @@ final class Delegation {
         if (caller.managesEverything()) {
             return null;
         }
+        String why = whyNotByItsOwn(caller, record);
+        return why == null || caller.alteringGroup() == null ? why : why + notByAGroup(caller);
+    }
+
+    private static String whyNotByItsOwn(Caller caller, BindingCodec.Decoded record) {
         List<RoleBinding> owned = caller.owned();
         if (owned.isEmpty()) {
             return whyNobody(caller);
@@ -311,6 +327,16 @@ final class Delegation {
         return "that takes " + WHOEVER_MANAGES_EVERYTHING
                 + ", or a ResourceOwner of a pattern that covers the record, and " + caller.principal()
                 + " is none of them";
+    }
+
+    /**
+     * What a member of a group that an ACL lets alter the cluster is told
+     * after the reason: it passed the broker's check through the group, and
+     * would otherwise read that no ACL allows it what one does.
+     */
+    private static String notByAGroup(Caller caller) {
+        return "; an ACL of its group " + caller.alteringGroup()
+                + " allows it ALTER on the cluster, but an ACL of a group does not make its members managers of access";
     }
 
     /** The answers as they are, or, when one refuses, with every other one refused for that. */

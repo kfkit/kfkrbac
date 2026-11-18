@@ -324,8 +324,11 @@ error: ClusterAuthorizationException: User:bob may not create Member:User:bob on
 An ACL of a group is honoured for requests, not for managing access: an ACL
 that allows `Group:payments` to `ALTER` the cluster does not let its members
 create ACLs, bindings or memberships, or replace a user's SCRAM credentials.
-Bind `SystemAdmin` to the group for that. This is checked by the unit tests
-of the authorizer, not on a broker.
+Bind `SystemAdmin` to the group for that. A member that is refused is told
+so after the reason, in the words `an ACL of its group Group:payments
+allows it ALTER on the cluster, but an ACL of a group does not make its
+members managers of access`. This is checked by the unit tests of the
+authorizer, not on a broker.
 
 ## Taking a user out of a group
 
