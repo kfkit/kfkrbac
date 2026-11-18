@@ -159,6 +159,10 @@ public class RbacAuthorizer extends StandardAuthorizer {
      */
     private static final Map<Uuid, StandardAcl> ALLOW_EVERYTHING = allowEverything();
 
+    /** {@code ALTER} on the cluster, asked without a line in the broker's log. */
+    private static final Action ALTER_THE_CLUSTER = new Action(AclOperation.ALTER,
+            new ResourcePattern(ResourceType.CLUSTER, Resource.CLUSTER_NAME, PatternType.LITERAL), 1, false, false);
+
     /** The name of the gauge that counts the records which look like bindings and are not. */
     static final String MALFORMED_BINDINGS_METRIC = "malformed-bindings";
 
@@ -667,8 +671,19 @@ public class RbacAuthorizer extends StandardAuthorizer {
     /** Who asks, with everything the rules of {@link Delegation} need to know about it. */
     private Delegation.Caller caller(AuthorizableRequestContext requestContext) {
         KafkaPrincipal principal = principal(requestContext);
-        return new Delegation.Caller(principal, aclsAllowAlteringTheCluster(requestContext),
-                bindings.heldBy(principal));
+        boolean byAcls = aclsAllowAlteringTheCluster(requestContext);
+        // Asked only to explain a refusal truly: an ACL of a group never makes its members managers of access,
+        // so a lookup that fails costs the sentence about the group and decides nothing.
+        KafkaPrincipal alteringGroup = null;
+        if (!byAcls) {
+            try {
+                alteringGroup = groupAcls.allowing(requestContext, principal, ALTER_THE_CLUSTER);
+            } catch (RuntimeException e) {
+                LOG.warn("Could not find whether an ACL of a group of {} allows it ALTER on the cluster",
+                        principal, e);
+            }
+        }
+        return new Delegation.Caller(principal, byAcls, bindings.heldBy(principal), alteringGroup);
     }
 
     /**
@@ -679,10 +694,7 @@ public class RbacAuthorizer extends StandardAuthorizer {
      * roles, and still does.
      */
     private boolean aclsAllowAlteringTheCluster(AuthorizableRequestContext requestContext) {
-        Action quiet = new Action(AclOperation.ALTER,
-                new ResourcePattern(ResourceType.CLUSTER, Resource.CLUSTER_NAME, PatternType.LITERAL), 1, false,
-                false);
-        return super.authorize(requestContext, List.of(quiet)).get(0) == AuthorizationResult.ALLOWED;
+        return super.authorize(requestContext, List.of(ALTER_THE_CLUSTER)).get(0) == AuthorizationResult.ALLOWED;
     }
 
     /** The error a caller gets for the record, or the filter, at that position of a refused request. */

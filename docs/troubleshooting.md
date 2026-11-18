@@ -111,8 +111,11 @@ Denied User:dave READ on TOPIC 'billing.invoices' (request Fetch): no ACL and no
   mistyped, `biling.` for `billing.`.
 - `(does not grant WRITE on TOPIC)`: the role is the wrong one for the
   operation, whatever its pattern.
-- `none`: the principal holds no role for that resource type. It may hold
-  roles for others: a binding on groups only is not listed for a topic.
+- `none`: the principal holds no role for that resource type. When it
+  holds roles for others, the line says how many, `none (its 2 role
+  bindings are for other resource types)`: a binding on groups only is not
+  listed for a topic, and a binding on topics is not listed for the
+  cluster.
 - `as Group:payments` after a binding: the principal holds it as a member
   of that [group](groups.md).
 
@@ -323,8 +326,8 @@ needs ALTER permission.
 ```
 
 The same check left its line in the broker's log. It says that she holds
-no role for the cluster; the roles she holds for topics are not what the
-check asks about:
+no role for the cluster, and that the two bindings she does hold are for
+other resource types, which is not what the check asks about:
 
 <!-- run -->
 ```bash
@@ -333,7 +336,7 @@ grep 'dev.kfkit.kfkrbac.denied' "$KAFKA_HOME/logs/server.log" | grep 'CreateAcls
 
 <!-- output -->
 ```text
-[2026-11-18 13:32:36,917] INFO Denied User:alice ALTER on CLUSTER 'kafka-cluster' (request CreateAcls): no ACL and no role allows it; roles held for CLUSTER: none (dev.kfkit.kfkrbac.denied)
+[2026-11-18 13:32:36,917] INFO Denied User:alice ALTER on CLUSTER 'kafka-cluster' (request CreateAcls): no ACL and no role allows it; roles held for CLUSTER: none (its 2 role bindings are for other resource types) (dev.kfkit.kfkrbac.denied)
 ```
 
 She needs `ResourceOwner` on a pattern that covers what she binds, or

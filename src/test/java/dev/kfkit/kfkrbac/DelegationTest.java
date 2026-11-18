@@ -241,6 +241,39 @@ class DelegationTest {
         }
     }
 
+    /**
+     * Both ways. A member of a group that an ACL lets alter the cluster is
+     * told that the ACL is there and why it does not count; a caller without
+     * such a group is told nothing of groups.
+     */
+    @Test
+    void aGroupThatAnAclLetsAlterTheClusterIsNamedInTheReason() {
+        KafkaPrincipal admins = new KafkaPrincipal("Group", "admins");
+        String byAGroup = "; an ACL of its group Group:admins allows it ALTER on the cluster, but an ACL of a group"
+                + " does not make its members managers of access";
+        for (List<AclBinding> held : List.of(List.<AclBinding>of(), List.of(OWNS_BILLING))) {
+            Delegation.Caller member = new Delegation.Caller(CAROL, false,
+                    held.stream().map(DelegationTest::read).toList(), admins);
+            Delegation.Caller nobody = new Delegation.Caller(CAROL, false,
+                    held.stream().map(DelegationTest::read).toList());
+            for (AclBinding record : List.of(BOB_READS_ORDERS, ALICE_IN_PAYMENTS, ALICE_ADMINISTERS)) {
+                String told = onlyRefusal(Delegation.create(member, List.of(record)));
+                assertTrue(told.endsWith(byAGroup), told);
+                assertEquals(onlyRefusal(Delegation.create(nobody, List.of(record))) + byAGroup, told);
+
+                String deleting = Delegation.delete(member, List.of(List.of(record))).answers().get(0).reason();
+                assertTrue(deleting.endsWith(byAGroup), deleting);
+                assertEquals(Delegation.delete(nobody, List.of(List.of(record))).answers().get(0).reason() + byAGroup,
+                        deleting);
+            }
+            String notTold = onlyRefusal(Delegation.create(nobody, List.of(BOB_READS_ORDERS)));
+            assertFalse(notTold.contains("group"), notTold);
+        }
+        // What the group does not give, the owner's own binding still does.
+        Delegation.Caller owner = new Delegation.Caller(CAROL, false, List.of(read(OWNS_BILLING)), admins);
+        assertTrue(Delegation.create(owner, List.of(ALICE_READS_BILLING)).allowed());
+    }
+
     @Test
     void oneRefusedRecordRefusesTheRequestAndEveryAnswerSaysWhy() {
         Delegation.Decision decision = Delegation.create(holding(OWNS_BILLING),

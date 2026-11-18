@@ -739,6 +739,36 @@ class RbacAuthorizerGroupsTest {
     }
 
     /**
+     * Both ways. The member that the ACL of its group lets through the
+     * broker's check is told, when it is refused, that the ACL is there and
+     * does not make it a manager of access; one in no such group is told
+     * nothing of groups.
+     */
+    @Test
+    void theReasonGivenToAMemberOfAGroupThatAnAclLetsAlterTheClusterNamesTheGroup() {
+        start(ALICE_IN_PAYMENTS, allow("Group:payments", THE_CLUSTER, ALTER), member("User:bob", "Group:readers"));
+        String byTheGroup = "; an ACL of its group Group:payments allows it ALTER on the cluster, but an ACL of a"
+                + " group does not make its members managers of access";
+
+        assertEquals(ALLOWED, gate("alice", ApiKeys.CREATE_ACLS));
+        for (AclBinding record : recordsFor("alice")) {
+            String told = refused(create("alice", record), 0).getMessage();
+            assertTrue(told.startsWith("User:alice may not create "), told);
+            assertTrue(told.endsWith("User:alice is none of them" + byTheGroup), told);
+        }
+        String deleting = refused(delete("alice", ALICE_IN_PAYMENTS.toBinding().toFilter()).get(0)).getMessage();
+        assertTrue(deleting.endsWith(byTheGroup), deleting);
+
+        assertEquals(DENIED, gate("bob", ApiKeys.CREATE_ACLS));
+        for (AclBinding record : recordsFor("bob")) {
+            String told = refused(create("bob", record), 0).getMessage();
+            assertTrue(told.endsWith("User:bob is none of them"), told);
+        }
+        assertEquals(List.of(), mutator.created);
+        assertEquals(List.of(), mutator.deleted);
+    }
+
+    /**
      * Both ways. An {@code ALLOW} ACL that lets a group {@code ALTER} the
      * cluster is not "the ACLs alone" for a member: it does not let the
      * member replace a user's SCRAM credentials, in either of the broker's
