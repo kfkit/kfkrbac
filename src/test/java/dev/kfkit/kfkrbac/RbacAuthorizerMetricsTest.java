@@ -20,6 +20,8 @@ import static dev.kfkit.kfkrbac.RbacAuthorizerTest.deny;
 import static dev.kfkit.kfkrbac.RbacAuthorizerTest.literal;
 import static dev.kfkit.kfkrbac.RbacAuthorizerTest.prefixed;
 import static org.apache.kafka.common.acl.AclOperation.ALL;
+import static org.apache.kafka.common.acl.AclOperation.DESCRIBE;
+import static org.apache.kafka.common.acl.AclOperation.IDEMPOTENT_WRITE;
 import static org.apache.kafka.common.acl.AclOperation.READ;
 import static org.apache.kafka.common.acl.AclOperation.WRITE;
 import static org.apache.kafka.common.acl.AclPermissionType.ALLOW;
@@ -79,6 +81,7 @@ class RbacAuthorizerMetricsTest {
 
     private static final String INVOICES = "billing.invoices";
     private static final String PAYROLL = "billing.payroll.2026";
+    private static final String CLUSTER = "kafka-cluster";
     private static final ResourcePattern BILLING = prefixed(TOPIC, "billing.");
     private static final Map<String, Object> ON = Map.of(RbacAuthorizer.METRICS_ENABLED_CONFIG, "true");
 
@@ -191,6 +194,115 @@ class RbacAuthorizerMetricsTest {
 
         assertEquals(Set.of(INVOICES), names("kfkwho:type=access,*").stream()
                 .map(name -> tag(name, "resource")).collect(Collectors.toSet()));
+    }
+
+    // --- #47: a denial the broker asked not to log is not a refusal ----------
+
+    /**
+     * Before {@code InitProducerId} the broker asks for
+     * {@code IDEMPOTENT_WRITE} on the cluster without logging a denial, and
+     * when that is denied, whether the producer may write to any topic. A
+     * role answers the second: the producer is not refused, and nothing
+     * denied is recorded.
+     */
+    @Test
+    void aProducerThatWritesByARoleLeavesNoDeniedSeries() {
+        start(ON, binding("DeveloperWrite:User:bob", BILLING));
+
+        startsAProducer(bob(ApiKeys.INIT_PRODUCER_ID), DENIED, ALLOWED);
+        assertEquals(ALLOWED, can("bob", WRITE, INVOICES));
+        recorded(INVOICES, Map.of("ALLOWED", 1.0));
+
+        assertEquals(Set.of(INVOICES + " ALLOWED"), resourcesAndVerdicts());
+    }
+
+    @Test
+    void aProducerRefusedWithoutTheRoleIsRecordedAsDenied() {
+        start(ON, binding("DeveloperWrite:User:alice", BILLING));
+
+        startsAProducer(bob(ApiKeys.INIT_PRODUCER_ID), DENIED, DENIED);
+
+        assertEquals(Map.of("DENIED", 1.0), recorded(CLUSTER, Map.of("DENIED", 1.0)));
+        assertEquals(Set.of("IDEMPOTENT_WRITE INIT_PRODUCER_ID"), names("kfkwho:type=access,*").stream()
+                .map(name -> tag(name, "operation") + " " + tag(name, "api")).collect(Collectors.toSet()));
+    }
+
+    @Test
+    void aProducerThatAnAclLetsWriteIdempotentlyIsRecordedAsAllowed() {
+        start(ON, acl("User:bob", literal(ResourceType.CLUSTER, CLUSTER), IDEMPOTENT_WRITE, "*", ALLOW));
+
+        assertEquals(List.of(ALLOWED), authorizer.authorize(bob(ApiKeys.INIT_PRODUCER_ID), idempotentWrite()));
+
+        assertEquals(Map.of("ALLOWED", 1.0), recorded(CLUSTER, Map.of("ALLOWED", 1.0)));
+    }
+
+    /** A topic left out of a listing: the broker filters, it does not refuse. */
+    @Test
+    void aDenialTheBrokerDoesNotLogIsNotRecorded() {
+        start(ON, binding("DeveloperRead:User:bob", BILLING));
+
+        assertEquals(List.of(DENIED, ALLOWED), authorizer.authorize(bob(ApiKeys.METADATA),
+                List.of(new Action(DESCRIBE, literal(TOPIC, "orders"), 1, true, false),
+                        new Action(DESCRIBE, literal(TOPIC, INVOICES), 1, true, false))));
+        recorded(INVOICES, Map.of("ALLOWED", 1.0));
+
+        assertEquals(Set.of(INVOICES + " ALLOWED"), resourcesAndVerdicts());
+    }
+
+    @Test
+    void theSameDenialAskedToBeLoggedIsRecorded() {
+        start(ON, binding("DeveloperRead:User:bob", BILLING));
+
+        assertEquals(List.of(DENIED, ALLOWED), authorizer.authorize(bob(ApiKeys.METADATA),
+                List.of(new Action(DESCRIBE, literal(TOPIC, "orders"), 1, true, true),
+                        new Action(DESCRIBE, literal(TOPIC, INVOICES), 1, true, true))));
+
+        assertEquals(Map.of("DENIED", 1.0), recorded("orders", Map.of("DENIED", 1.0)));
+        assertEquals(Map.of("ALLOWED", 1.0), recorded(INVOICES, Map.of("ALLOWED", 1.0)));
+    }
+
+    /** What is held back belongs to one request: a question about another does not record it. */
+    @Test
+    void aHeldBackDenialIsNotRecordedForAnotherRequest() {
+        start(ON, binding("DeveloperWrite:User:alice", BILLING));
+
+        assertEquals(List.of(DENIED), authorizer.authorize(bob(ApiKeys.INIT_PRODUCER_ID), idempotentWrite()));
+        assertEquals(DENIED, authorizer.authorizeByResourceType(bob(ApiKeys.INIT_PRODUCER_ID), WRITE, TOPIC));
+        assertEquals(DENIED, can("bob", WRITE, INVOICES));
+        recorded(INVOICES, Map.of("DENIED", 1.0));
+
+        assertEquals(Set.of(INVOICES + " DENIED"), resourcesAndVerdicts());
+    }
+
+    /** Nor does a question asked after another request came between. */
+    @Test
+    void aHeldBackDenialIsDroppedByTheNextRequest() {
+        start(ON, binding("DeveloperWrite:User:alice", BILLING));
+        RequestContext producer = bob(ApiKeys.INIT_PRODUCER_ID);
+
+        assertEquals(List.of(DENIED), authorizer.authorize(producer, idempotentWrite()));
+        assertEquals(DENIED, can("bob", WRITE, INVOICES));
+        assertEquals(DENIED, authorizer.authorizeByResourceType(producer, WRITE, TOPIC));
+        recorded(INVOICES, Map.of("DENIED", 1.0));
+
+        assertEquals(Set.of(INVOICES + " DENIED"), resourcesAndVerdicts());
+    }
+
+    /** As the broker asks before {@code InitProducerId}, with what each question is to answer. */
+    private void startsAProducer(RequestContext producer, AuthorizationResult idempotent,
+            AuthorizationResult anyTopic) {
+        assertEquals(List.of(idempotent), authorizer.authorize(producer, idempotentWrite()));
+        assertEquals(anyTopic, authorizer.authorizeByResourceType(producer, WRITE, TOPIC));
+    }
+
+    private static List<Action> idempotentWrite() {
+        return List.of(new Action(IDEMPOTENT_WRITE, literal(ResourceType.CLUSTER, CLUSTER), 1, true, false));
+    }
+
+    /** Each series as its resource and its verdict. */
+    private static Set<String> resourcesAndVerdicts() {
+        return names("kfkwho:type=access,*").stream()
+                .map(name -> tag(name, "resource") + " " + tag(name, "result")).collect(Collectors.toSet());
     }
 
     // --- AC2: off means off ------------------------------------------------------

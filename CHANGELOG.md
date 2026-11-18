@@ -7,6 +7,16 @@ major version is 0.
 
 ## Unreleased
 
+### Fixed
+
+- With `kfkrbac.metrics.enabled=true`, a denial the broker asks for without
+  logging it is no longer recorded as `DENIED`: a producer that writes by a
+  role, or by an ACL on its topics, no longer leaves a growing `DENIED`
+  series for `IDEMPOTENT_WRITE` on the cluster, and a topic left out of a
+  listing of all topics no longer leaves one for `DESCRIBE`. A producer
+  that is refused is still recorded as denied. See
+  [docs/metrics.md](docs/metrics.md#what-is-recorded).
+
 ## 0.1.0 - 2026-11-18
 
 The first release.
