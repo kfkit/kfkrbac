@@ -1,8 +1,14 @@
+import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
+import java.security.MessageDigest
+
 plugins {
     java
     `jvm-test-suite`
     `maven-publish`
     id("me.champeau.jmh") version "0.7.3"
+    // Only its task type is used, to relocate kfkwho's classes. Applied, the
+    // plugin would build and publish a second jar next to the one that ships.
+    id("com.gradleup.shadow") version "9.6.1" apply false
 }
 
 group = "dev.kfkit"
@@ -21,6 +27,34 @@ val jerseyVersion = "3.1.10"
 // The broker image the integration tests run the jar on: -PbrokerVersion=4.1.2.
 val brokerVersion = providers.gradleProperty("brokerVersion").getOrElse(kafkaVersion)
 
+// kfkwho, whose access metrics the authorizer publishes on request, is a
+// dependency and never a copy: its released jar, with its classes relocated
+// into this project's package, is part of the jar that ships. The version is
+// declared here and nowhere else in the build. What is fetched is checked
+// against these SHA-256 before anything is built from it, so a new version
+// needs them too: of the jar, the content of kfkwho-<version>.jar.sha256 in
+// the release; of the exporter rules the integration tests use,
+// `shasum -a 256 jmx-exporter/kfkwho.yml` at the tag.
+val kfkwhoVersion = "0.1.0"
+val kfkwhoSha256 = "6d79dd82f5a2dc4af21305977902b79d37f0c307b7457ea0e53206aaba7de88a"
+val kfkwhoRulesSha256 = "e520ea65994a20218901acc20df38678f4df221ce1651b75085712940762cf65"
+val kfkwhoRepository = "https://github.com/kfkit/kfkwho"
+val kfkwhoPackage = "dev.kfkit.kfkwho"
+val relocatedKfkwhoPackage = "dev.kfkit.kfkrbac.shaded.kfkwho"
+
+// Fails the build when a file that was fetched is not the one kfkwho released.
+val requireReleased: (File, String, String, String) -> Unit = { file, expected, setting, version ->
+    val actual = MessageDigest.getInstance("SHA-256").digest(file.readBytes())
+        .joinToString("") { "%02x".format(it) }
+    if (actual != expected) {
+        throw GradleException(
+            "${file.name} is not the file kfkwho $version released: its SHA-256 is $actual and the build "
+                + "expects $expected ($setting in build.gradle.kts). It was not used. If the release "
+                + "was replaced on purpose, change $setting; if not, look at what was fetched: $file"
+        )
+    }
+}
+
 java {
     toolchain {
         languageVersion = JavaLanguageVersion.of(17)
@@ -32,6 +66,58 @@ java {
 
 repositories {
     mavenCentral()
+    // kfkwho is released on GitHub and is not on Maven Central yet. Its jar is
+    // looked for in its release and its exporter rules at the release's tag,
+    // nowhere else, and nothing else is looked for there. There is no
+    // metadata: the files are all there is.
+    exclusiveContent {
+        forRepository {
+            ivy {
+                name = "kfkwhoReleases"
+                url = uri(kfkwhoRepository)
+                patternLayout {
+                    artifact("releases/download/v[revision]/[module]-[revision].[ext]")
+                    artifact("raw/v[revision]/jmx-exporter/[module].[ext]")
+                }
+                metadataSources {
+                    artifact()
+                }
+            }
+        }
+        filter {
+            includeModule("dev.kfkit", "kfkwho")
+        }
+    }
+}
+
+// The jar of kfkwho as it was released. Only relocatedKfkwho reads it.
+val kfkwho = configurations.create("kfkwho") {
+    isCanBeConsumed = false
+    isTransitive = false
+}
+
+// kfkwho's classes in this project's package, so that a broker which also has
+// kfkwho's own jar in libs/ loads each from its own. Everything here that
+// uses kfkwho, the tests and the benchmarks included, uses this jar: what is
+// tested is what ships. The authorizer of kfkwho itself is left out; only
+// the recorder and what it needs are bundled.
+val relocatedKfkwho = tasks.register<ShadowJar>("relocatedKfkwho") {
+    description = "Checks the released kfkwho jar and relocates its classes into $relocatedKfkwhoPackage."
+    val released: FileCollection = kfkwho
+    val version = kfkwhoVersion
+    val expected = kfkwhoSha256
+    val check = requireReleased
+    configurations = listOf(kfkwho)
+    relocate(kfkwhoPackage, relocatedKfkwhoPackage)
+    exclude("META-INF/**")
+    exclude("${kfkwhoPackage.replace('.', '/')}/MeteredStandardAuthorizer.class")
+    archiveFileName = "kfkwho-$kfkwhoVersion-relocated.jar"
+    destinationDirectory = layout.buildDirectory.dir("kfkwho")
+    // A changed checksum checks the same file again.
+    inputs.property("sha256", expected)
+    doFirst {
+        check(released.singleFile, expected, "kfkwhoSha256", version)
+    }
 }
 
 dependencies {
@@ -45,6 +131,8 @@ dependencies {
     compileOnly("org.apache.kafka:connect-api:$kafkaVersion")
     compileOnly("jakarta.ws.rs:jakarta.ws.rs-api:$jakartaRsVersion")
     compileOnly("com.fasterxml.jackson.core:jackson-databind:$jacksonVersion")
+    // Inside the jar, see tasks.jar: not a dependency of what is published.
+    compileOnly(files(relocatedKfkwho))
 
     testImplementation("org.apache.kafka:kafka-metadata:$kafkaVersion")
     testImplementation("org.apache.kafka:kafka-clients:$kafkaVersion")
@@ -56,6 +144,7 @@ dependencies {
     testRuntimeOnly("org.glassfish.jersey.core:jersey-common:$jerseyVersion")
     // The admin client with a mock network underneath: what the command sends and how it reads a refusal.
     testImplementation("org.apache.kafka:kafka-clients:$kafkaVersion:test-fixtures")
+    testImplementation(files(relocatedKfkwho))
     testImplementation(platform("org.junit:junit-bom:6.1.3"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
@@ -64,6 +153,25 @@ dependencies {
     jmh("org.apache.kafka:kafka-metadata:$kafkaVersion")
     jmh("org.apache.kafka:kafka-clients:$kafkaVersion")
     jmh("org.apache.kafka:kafka-server-common:$kafkaVersion")
+    jmh(files(relocatedKfkwho))
+}
+
+// What the integration tests give a broker besides the jar: kfkwho's own
+// exporter rules, as released with the version bundled, and the JMX Exporter
+// agent that reads them.
+val kfkwhoRules = configurations.create("kfkwhoRules") {
+    isCanBeConsumed = false
+    isTransitive = false
+}
+val jmxExporterAgent = configurations.create("jmxExporterAgent") {
+    isCanBeConsumed = false
+    isTransitive = false
+}
+
+dependencies {
+    kfkwho("dev.kfkit:kfkwho:$kfkwhoVersion")
+    kfkwhoRules("dev.kfkit:kfkwho:$kfkwhoVersion@yml")
+    jmxExporterAgent("io.prometheus.jmx:jmx_prometheus_javaagent:1.0.1")
 }
 
 testing {
@@ -85,10 +193,34 @@ testing {
                     dependsOn(tasks.jar)
                     inputs.files(tasks.jar)
                     inputs.property("brokerVersion", brokerVersion)
+                    // DocsIT runs the commands of these pages: a change to a page alone reruns it.
+                    inputs.files(fileTree("docs") { include("*.md") })
+                        .withPropertyName("docs")
+                        .withPathSensitivity(PathSensitivity.RELATIVE)
                     outputs.dir(brokerLogs)
                     systemProperty("kfkrbac.it.jar", tasks.jar.get().archiveFile.get().asFile.absolutePath)
                     systemProperty("kfkrbac.it.image", "apache/kafka:$brokerVersion")
                     systemProperty("kfkrbac.it.logs", brokerLogs.get().asFile.absolutePath)
+                    // For the tests of the metrics: kfkwho's rules and its own jar, both as
+                    // released, and the agent. The jar was checked when it was relocated.
+                    val kfkwhoJar: FileCollection = kfkwho
+                    val rules: FileCollection = kfkwhoRules
+                    val agent: FileCollection = jmxExporterAgent
+                    val rulesSha256 = kfkwhoRulesSha256
+                    val version = kfkwhoVersion
+                    val check = requireReleased
+                    inputs.files(kfkwhoJar, rules, agent)
+                    inputs.property("kfkwhoRulesSha256", rulesSha256)
+                    doFirst {
+                        check(rules.singleFile, rulesSha256, "kfkwhoRulesSha256", version)
+                    }
+                    jvmArgumentProviders.add(CommandLineArgumentProvider {
+                        listOf(
+                            "-Dkfkrbac.it.kfkwho=${kfkwhoJar.singleFile.absolutePath}",
+                            "-Dkfkrbac.it.rules=${rules.singleFile.absolutePath}",
+                            "-Dkfkrbac.it.agent=${agent.singleFile.absolutePath}",
+                        )
+                    })
                     // The clients' own chatter; what a broker said is in build/integration-logs.
                     systemProperty("org.slf4j.simpleLogger.defaultLogLevel", "warn")
                     testLogging {
@@ -146,16 +278,36 @@ jmh {
 
 tasks.test {
     useJUnitPlatform()
-    // RoleTest compares these with the code: a change to them alone reruns it.
-    inputs.files("docs/roles.md", "README.md")
+    // RoleTest compares these with the code and DocsTest follows their links:
+    // a change to them alone reruns the tests.
+    inputs.files(fileTree("docs"), "README.md")
         .withPropertyName("docs")
         .withPathSensitivity(PathSensitivity.RELATIVE)
+    // MetricsDocTest compares these with the code and with the kfkwho bundled.
+    inputs.files("docs/metrics.md", "NOTICE")
+        .withPropertyName("metricsDocs")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    systemProperty("kfkrbac.kfkwho.version", kfkwhoVersion)
+    // JarContentsTest reads the jar that ships.
+    inputs.files(tasks.jar)
+        .withPropertyName("jar")
+        .withPathSensitivity(PathSensitivity.NONE)
+    systemProperty("kfkrbac.jar", tasks.jar.get().archiveFile.get().asFile.absolutePath)
     testLogging {
         events("passed", "skipped", "failed")
     }
 }
 
+// The jar that ships is self-contained: our classes and kfkwho's, relocated,
+// with the licence and the notice that covers both. It has no dependency and
+// no Class-Path; Kafka's classes and SLF4J are the broker's.
 tasks.jar {
+    from(zipTree(relocatedKfkwho.flatMap { it.archiveFile })) {
+        exclude("META-INF/**")
+    }
+    from(files("LICENSE", "NOTICE")) {
+        into("META-INF")
+    }
     manifest {
         attributes(
             "Implementation-Title" to project.name,

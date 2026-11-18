@@ -21,6 +21,10 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.ServerSocket;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -57,7 +61,12 @@ import org.testcontainers.utility.MountableFile;
  * exists, so the address the broker advertises stays true when the node is
  * stopped and started again.
  *
- * <p>Gradle passes the image ({@code -PbrokerVersion}) and the jar as system
+ * <p>A node {@link #withMetrics() with metrics} publishes kfkwho's access
+ * metrics and runs the JMX Exporter agent with kfkwho's own rules, as an
+ * operator would to scrape them.
+ *
+ * <p>Gradle passes the image ({@code -PbrokerVersion}), the jar and, for the
+ * metrics, the agent, kfkwho's rules and kfkwho's own jar as system
  * properties.
  */
 final class Node implements AutoCloseable {
@@ -74,6 +83,9 @@ final class Node implements AutoCloseable {
             "Docker is not available; the broker integration tests need it and are skipped";
 
     private static final String DIR = "/opt/kfkrbac/";
+    /** Where the distribution keeps its jars: all of them are on the node's classpath. */
+    private static final String LIBS = "/opt/kafka/libs/";
+    private static final int EXPORTER_PORT = 9404;
     private static final int CLIENT_PORT = 9092;
     private static final int CONTROLLER_PORT = 9093;
     private static final int INTERNAL_PORT = 19092;
@@ -146,13 +158,67 @@ final class Node implements AutoCloseable {
         container = new GenericContainer<>(DockerImageName.parse(property("kfkrbac.it.image")))
                 .withNetwork(network)
                 .withNetworkAliases(alias(id))
-                .withCopyFileToContainer(MountableFile.forHostPath(Path.of(property("kfkrbac.it.jar"))),
-                        DIR + "kfkrbac.jar")
+                .withCopyFileToContainer(file("kfkrbac.it.jar"), DIR + "kfkrbac.jar")
                 .withCopyToContainer(Transferable.of(JAAS), DIR + "jaas.conf")
                 .withEnv(env)
                 .waitingFor(Wait.forLogMessage(".*" + STARTED + ".*\\n", 1).withStartupTimeout(START_TIMEOUT));
         if (broker) {
             container.setPortBindings(List.of(port + ":" + CLIENT_PORT));
+        }
+    }
+
+    /**
+     * Turns kfkwho's metrics on, and has the JMX Exporter agent publish them
+     * as kfkwho's own rules say. For a node that is a broker and has not
+     * started.
+     */
+    Node withMetrics() {
+        String agent = "-javaagent:" + DIR + "jmx-exporter-agent.jar=" + EXPORTER_PORT + ":" + DIR + "kfkwho.yml";
+        container.withEnv("KAFKA_KFKRBAC_METRICS_ENABLED", "true")
+                .withEnv("KAFKA_OPTS", container.getEnvMap().get("KAFKA_OPTS") + " " + agent)
+                .withCopyFileToContainer(file("kfkrbac.it.agent"), DIR + "jmx-exporter-agent.jar")
+                .withCopyFileToContainer(file("kfkrbac.it.rules"), DIR + "kfkwho.yml")
+                .addExposedPort(EXPORTER_PORT);
+        return this;
+    }
+
+    /**
+     * Puts the jar into the distribution's {@code libs/}, where an operator
+     * copies it, and kfkwho's own jar, as released, next to it. For a node
+     * that has not started.
+     */
+    Node withKfkwhoInLibs() {
+        container.getEnvMap().remove("CLASSPATH");
+        container.withCopyFileToContainer(file("kfkrbac.it.jar"), LIBS + "kfkrbac.jar")
+                .withCopyFileToContainer(file("kfkrbac.it.kfkwho"), LIBS + "kfkwho.jar");
+        return this;
+    }
+
+    /** What the JMX Exporter agent of a node {@link #withMetrics() with metrics} answers a scrape, or why it did not. */
+    String scrape() {
+        URI uri = URI.create("http://" + DockerClientFactory.instance().dockerHostIpAddress() + ":"
+                + container.getMappedPort(EXPORTER_PORT) + "/metrics");
+        try {
+            return HttpClient.newBuilder().proxy(HttpClient.Builder.NO_PROXY).build()
+                    .send(HttpRequest.newBuilder(uri).build(), HttpResponse.BodyHandlers.ofString()).body();
+        } catch (IOException e) {
+            return "scraping " + uri + " failed: " + e;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("interrupted while scraping " + uri, e);
+        }
+    }
+
+    /** The names of the files in the distribution's {@code libs/} that match the pattern, sorted. */
+    List<String> libs(String pattern) {
+        try {
+            return container.execInContainer("sh", "-c", "cd " + LIBS + " && ls " + pattern).getStdout().lines()
+                    .sorted().toList();
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("interrupted while listing " + LIBS, e);
         }
     }
 
@@ -302,6 +368,11 @@ final class Node implements AutoCloseable {
                 throw new UncheckedIOException(e);
             }
         }
+    }
+
+    /** The file on this host that Gradle named in that system property. */
+    private static MountableFile file(String property) {
+        return MountableFile.forHostPath(Path.of(property(property)));
     }
 
     private static String property(String name) {

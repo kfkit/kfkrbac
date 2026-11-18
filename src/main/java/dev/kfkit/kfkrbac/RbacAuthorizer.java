@@ -29,11 +29,13 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.IntFunction;
 
+import dev.kfkit.kfkrbac.shaded.kfkwho.AccessRecorder;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.acl.AclBinding;
 import org.apache.kafka.common.acl.AclBindingFilter;
 import org.apache.kafka.common.acl.AclOperation;
 import org.apache.kafka.common.acl.AclPermissionType;
+import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.common.errors.ApiException;
 import org.apache.kafka.common.errors.ClusterAuthorizationException;
 import org.apache.kafka.common.errors.InvalidRequestException;
@@ -99,6 +101,11 @@ import org.slf4j.LoggerFactory;
  * guards the request that replaces a user's password, and there no role but
  * {@code SystemAdmin} passes it.
  *
+ * <p>With {@value #METRICS_ENABLED_CONFIG} set, every verdict
+ * {@link #authorize} returns is also handed to kfkwho's recorder, which
+ * publishes who accessed what as JMX metrics. Without it nothing of kfkwho
+ * is created.
+ *
  * <p>Configure with {@code authorizer.class.name=dev.kfkit.kfkrbac.RbacAuthorizer}.
  */
 public class RbacAuthorizer extends StandardAuthorizer {
@@ -129,6 +136,9 @@ public class RbacAuthorizer extends StandardAuthorizer {
     /** The name of the gauge that counts the records which look like bindings and are not. */
     static final String MALFORMED_BINDINGS_METRIC = "malformed-bindings";
 
+    /** The setting that turns kfkwho's access metrics on; off when absent. */
+    static final String METRICS_ENABLED_CONFIG = "kfkrbac.metrics.enabled";
+
     /** What decides for the roles: {@link #bindings} on a broker. */
     private final Roles roles;
 
@@ -146,6 +156,9 @@ public class RbacAuthorizer extends StandardAuthorizer {
 
     /** The private authorizer's own metrics; never reported. */
     private final Metrics denyMetrics = new Metrics();
+
+    /** Publishes the verdicts as kfkwho's metrics; null unless {@link #METRICS_ENABLED_CONFIG} is on. */
+    private volatile AccessRecorder recorder;
 
     public RbacAuthorizer() {
         this(new BindingIndex());
@@ -175,6 +188,12 @@ public class RbacAuthorizer extends StandardAuthorizer {
         denyConfigs.remove(SUPER_USERS_CONFIG);
         denyConfigs.put(ALLOW_EVERYONE_IF_NO_ACL_IS_FOUND_CONFIG, "false");
         denies.configure(denyConfigs);
+        Object enabled = configs.get(METRICS_ENABLED_CONFIG);
+        if (enabled != null
+                && (Boolean) ConfigDef.parseType(METRICS_ENABLED_CONFIG, enabled, ConfigDef.Type.BOOLEAN)) {
+            // Throws on a wrong kfkwho.* value, naming the key. Records on a broker only.
+            recorder = AccessRecorder.create(configs);
+        }
     }
 
     @Override
@@ -254,7 +273,13 @@ public class RbacAuthorizer extends StandardAuthorizer {
                 granted.set(i, AuthorizationResult.ALLOWED);
             }
         }
-        return granted == null ? results : granted;
+        List<AuthorizationResult> verdicts = granted == null ? results : granted;
+        // The parent's own question while it answers authorizeByResourceType is not a verdict.
+        AccessRecorder recorder = this.recorder;
+        if (recorder != null && ACLS_ONLY.get() == null) {
+            recorder.record(requestContext, actions, verdicts);
+        }
+        return verdicts;
     }
 
     /**
@@ -422,7 +447,14 @@ public class RbacAuthorizer extends StandardAuthorizer {
             denyMetrics.close();
             groupAcls.close();
         } finally {
-            super.close();
+            try {
+                super.close();
+            } finally {
+                AccessRecorder recorder = this.recorder;
+                if (recorder != null) {
+                    recorder.close();
+                }
+            }
         }
     }
 

@@ -78,3 +78,27 @@ jobs:
           path: |
             build/reports/tests/
             build/integration-logs/
+
+  # The shell commands of docs/install.md, docs/bindings.md and
+  # docs/delegation.md, run as the pages have them in the container of a
+  # broker of the newest release, and their output compared with the pages'.
+  integration-docs:
+    name: integration (docs)
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v6
+      - run: ./gradlew integrationTest --tests '*DocsIT' --no-daemon
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-reports-docs
+          path: |
+            build/reports/tests/
+            build/integration-logs/
