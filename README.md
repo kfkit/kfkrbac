@@ -42,8 +42,7 @@ topic, a prefix or the whole cluster.
 
 ## How a request is decided
 
-For every resource of every request, the broker asks the authorizer two
-questions, and both are answered the same way:
+The broker asks the authorizer about every resource of every request:
 
 1. The ACLs first, exactly as `StandardAuthorizer` answers them. What they
    allow is allowed, and the roles are not consulted at all: a request an
@@ -53,10 +52,11 @@ questions, and both are answered the same way:
 3. Otherwise it is allowed when a role bound to the principal covers it,
    and denied when none does or the roles cannot be read.
 
-The second question, "may this principal do this on any resource of the
-type", is what an idempotent producer is asked for `WRITE` on topics before
-it sends anything. A role answers it with yes when it covers some resource
-that no deny ACL of the principal covers entirely.
+It also asks a second question, "may this principal do this on any
+resource of the type": an idempotent producer is asked it for `WRITE` on
+topics before it sends anything. That one is answered the same way: the
+ACLs first, and then yes when a role covers some resource that no deny ACL
+of the principal covers entirely.
 
 With `allow.everyone.if.no.acl.found=true` the ACLs already allow whatever
 no ACL names, so roles add nothing there. Leave it at its default, `false`,
