@@ -34,8 +34,11 @@ defect, not a trade-off. The map:
 - **Russian, or any language but English,** anywhere in the repository: code,
   comments, commits, PR text, issues.
 - **Naming a commercial product or its vendor.** No "alternative to", no
-  comparison, no feature table against anyone: not in code, docs, issues, PRs
-  or commit messages. Say what this does.
+  comparison, no feature table against anyone: not in docs, issues, PRs,
+  commit messages or comments in code. Say what this does. The one exception
+  is an identifier the code cannot do without: a package or a class in an
+  import, the coordinates of a dependency, a configuration key. In prose a
+  component goes by its own name, without the vendor's.
 - **Granting on failure.** An exception, a binding that cannot be read, a
   role that is unknown, a store that is not loaded: none of them is ever
   `ALLOWED`. The answer is the ACLs' verdict, `DENIED`, or "not ready".
@@ -126,6 +129,9 @@ defect, not a trade-off. The map:
   schema registry, and reads the same bindings. A binding for them carries
   the resource type in its name (`Subject:orders-`), which no topic can be
   called: a colon is not legal in a topic name.
+- **Schema Registry first.** Of the schema registries, the first one
+  supported is Schema Registry, the one extended through
+  `resource.extension.class`. Others may follow.
 - **Existing role bindings must be easy to bring over.** That matters more
   than looking the same as anything else: where a familiar name or shape
   costs nothing it is kept, and where it would bring a known trouble with it
@@ -147,9 +153,9 @@ maintainer's answer.
   and delete, and what is still to be shown on a cluster of several nodes
   (#5).
 - The command: what it does on top of the ACL tool (#6).
-- Schemas and connectors: how Kafka Connect and a schema registry are
-  plugged into, who the caller of a REST request is, and which schema
-  registry comes first (#8).
+- Schemas and connectors: how Kafka Connect and Schema Registry are
+  plugged into, who the caller of a REST request is, and how fresh the
+  bindings are there (#8).
 - Bringing existing role bindings over: the formats read and how they are
   documented (#9).
 
