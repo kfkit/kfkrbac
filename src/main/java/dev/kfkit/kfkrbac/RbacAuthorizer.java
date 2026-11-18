@@ -672,8 +672,17 @@ public class RbacAuthorizer extends StandardAuthorizer {
     private Delegation.Caller caller(AuthorizableRequestContext requestContext) {
         KafkaPrincipal principal = principal(requestContext);
         boolean byAcls = aclsAllowAlteringTheCluster(requestContext);
-        // Asked only to explain a refusal truly: an ACL of a group never makes its members managers of access.
-        KafkaPrincipal alteringGroup = byAcls ? null : groupAcls.allowing(requestContext, principal, ALTER_THE_CLUSTER);
+        // Asked only to explain a refusal truly: an ACL of a group never makes its members managers of access,
+        // so a lookup that fails costs the sentence about the group and decides nothing.
+        KafkaPrincipal alteringGroup = null;
+        if (!byAcls) {
+            try {
+                alteringGroup = groupAcls.allowing(requestContext, principal, ALTER_THE_CLUSTER);
+            } catch (RuntimeException e) {
+                LOG.warn("Could not find whether an ACL of a group of {} allows it ALTER on the cluster",
+                        principal, e);
+            }
+        }
         return new Delegation.Caller(principal, byAcls, bindings.heldBy(principal), alteringGroup);
     }
 
