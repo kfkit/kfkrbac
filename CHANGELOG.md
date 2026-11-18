@@ -26,6 +26,10 @@ major version is 0.
   bindings the principal holds for other resource types, so that it does
   not read as "this principal holds no role at all". See
   [docs/troubleshooting.md](docs/troubleshooting.md).
+- With `kafka.authorizer.logger` at `TRACE`, the check for a deny ACL after
+  a role or a group allowed a request, and the check of the ACLs of groups,
+  no longer write lines of their own there, as if they were decisions of
+  the broker's authorizer.
 
 ## 0.1.0 - 2026-11-18
 

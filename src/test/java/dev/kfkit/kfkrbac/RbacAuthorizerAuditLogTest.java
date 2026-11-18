@@ -305,6 +305,75 @@ class RbacAuthorizerAuditLogTest {
         assertEquals(List.of(), byTypeAudit(parent, "dave", DENIED), "as the parent writes none");
     }
 
+    // --- at TRACE: the deny ACLs and the ACLs of groups are asked without a line --------------
+
+    @Test
+    void theDenyAclsAskedAfterARoleWriteNothingAtTrace() {
+        start(BOB_READS_BILLING, deny("User:bob", literal(TOPIC, "billing.payroll"), READ, "*"),
+                deny("User:dave", INVOICES, READ, "*"));
+
+        List<String> lines = verdicts(auditAtTrace(authorizer, "bob", action(READ, INVOICES, true, true), ALLOWED));
+
+        // The parent's own answer, asked without its "Denied" line, and the role's: nothing of the deny ACLs.
+        assertEquals(List.of("TRACE User:bob Denied DefaultDeny", "DEBUG User:bob Allowed RoleBinding"), lines);
+    }
+
+    @Test
+    void aDenyAclThatMatchesAfterARoleWritesOnlyTheParentsLineAtTrace() {
+        start(BOB_READS_BILLING, deny("User:bob", INVOICES, READ, "*"));
+
+        List<String> lines = verdicts(auditAtTrace(authorizer, "bob", action(READ, INVOICES, true, true), DENIED));
+
+        // The parent's own answers: asked without its "Denied" line, then again for that line, now final.
+        assertEquals(List.of("TRACE User:bob Denied MatchingAcl", "INFO User:bob Denied MatchingAcl"), lines);
+    }
+
+    @Test
+    void theAclsOfGroupsWriteNothingAtTrace() {
+        start(ALICE_IN_PAYMENTS, allow("Group:payments", ORDERS, READ),
+                deny("Group:payments", literal(TOPIC, "orders.archive"), READ, "*"));
+
+        List<String> lines = verdicts(auditAtTrace(authorizer, "alice", action(READ, ORDERS, true, true), ALLOWED));
+
+        assertEquals(List.of("TRACE User:alice Denied DefaultDeny", "DEBUG User:alice Allowed GroupAcl"), lines);
+    }
+
+    @Test
+    void aDenyAclOfAGroupThatMatchesWritesOnlyTheParentsLineAtTrace() {
+        start(ALICE_IN_PAYMENTS, allow("Group:payments", ORDERS, READ), deny("Group:payments", ORDERS, READ, "*"));
+
+        List<String> lines = verdicts(auditAtTrace(authorizer, "alice", action(READ, ORDERS, true, true), DENIED));
+
+        assertEquals(List.of("TRACE User:alice Denied DefaultDeny", "INFO User:alice Denied DefaultDeny"), lines);
+    }
+
+    @Test
+    void theSecondQuestionWritesAtTraceWhatTheParentWritesWhenAGroupAllowsIt() {
+        start(ALICE_IN_PAYMENTS, allow("Group:payments", ORDERS, WRITE), deny("User:alice", ORDERS, READ, "*"));
+
+        List<Logs.Line> byGroup = new ArrayList<>();
+        Logs.atTrace(RoleAudit.LOGGER, () -> byGroup.addAll(byTypeAudit(authorizer, "alice", ALLOWED)));
+        List<Logs.Line> byParent = new ArrayList<>();
+        Logs.atTrace(RoleAudit.LOGGER, () -> byParent.addAll(byTypeAudit(parent, "alice", DENIED)));
+
+        assertTrue(!byParent.isEmpty(), "the parent writes its own answers at TRACE");
+        assertEquals(byParent, byGroup);
+    }
+
+    @Test
+    void theSecondQuestionWritesAtTraceWhatTheParentWritesWhenARoleAllowsIt() {
+        start(binding("DeveloperWrite:User:bob", BILLING), deny("User:bob", literal(TOPIC, "billing.payroll"),
+                WRITE, "*"));
+
+        List<Logs.Line> byRole = new ArrayList<>();
+        Logs.atTrace(RoleAudit.LOGGER, () -> byRole.addAll(byTypeAudit(authorizer, "bob", ALLOWED)));
+        List<Logs.Line> byParent = new ArrayList<>();
+        Logs.atTrace(RoleAudit.LOGGER, () -> byParent.addAll(byTypeAudit(parent, "bob", DENIED)));
+
+        assertTrue(!byParent.isEmpty(), "the parent writes its own answers at TRACE");
+        assertEquals(byParent, byRole);
+    }
+
     // --- helpers --------------------------------------------------------------------------
 
     /** The authorizer as the broker creates it, and the broker's own with the same records. */
@@ -353,6 +422,21 @@ class RbacAuthorizerAuditLogTest {
         List<Logs.Line> lines = new ArrayList<>();
         Logs.atDebug(RoleAudit.LOGGER, () -> lines.addAll(audit(asked, user, action, expected)));
         return lines;
+    }
+
+    /** The same with the log at {@code TRACE}, where the broker's authorizer writes every answer. */
+    private static List<Logs.Line> auditAtTrace(StandardAuthorizer asked, String user, Action action,
+            AuthorizationResult expected) {
+        List<Logs.Line> lines = new ArrayList<>();
+        Logs.atTrace(RoleAudit.LOGGER, () -> lines.addAll(audit(asked, user, action, expected)));
+        return lines;
+    }
+
+    /** Each line as its level, its principal, its verdict and the kind of its rule. */
+    private static List<String> verdicts(List<Logs.Line> lines) {
+        return lines.stream().map(line -> line.level() + " "
+                + line.message().replaceAll("Principal = (\\S+) is (\\w+) .* based on rule (\\w+).*", "$1 $2 $3"))
+                .toList();
     }
 
     private static List<Logs.Line> byTypeAudit(StandardAuthorizer asked, String user, AuthorizationResult expected) {

@@ -464,3 +464,12 @@ request that an ACL of a group allows its member names the group instead:
 `based on rule GroupAcl(group=Group:payments)`. Neither ever leaves a
 `Denied` line there. These two lines are from the unit tests of the
 authorizer.
+
+At `TRACE` the broker writes there every answer its authorizer gives,
+those it was asked not to log included. This authorizer asks the parent
+first, and the parent's answer is written as it is without roles. For a
+principal that holds a binding or is in a group, the parent is first asked
+not to log a denial, which leaves a `TRACE` line, and asked again, for its
+`INFO` line, only when the request stays denied. Whether a deny ACL
+matches, and what an ACL of a group allows, is found without a line in
+that log.

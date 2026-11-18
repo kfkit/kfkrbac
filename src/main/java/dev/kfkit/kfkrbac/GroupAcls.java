@@ -17,7 +17,6 @@ package dev.kfkit.kfkrbac;
 
 import java.io.Closeable;
 import java.io.IOException;
-import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -29,30 +28,26 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.acl.AclOperation;
 import org.apache.kafka.common.acl.AclPermissionType;
-import org.apache.kafka.common.metrics.Metrics;
-import org.apache.kafka.common.metrics.internals.PluginMetricsImpl;
 import org.apache.kafka.common.resource.PatternType;
 import org.apache.kafka.common.resource.ResourcePattern;
 import org.apache.kafka.common.resource.ResourceType;
 import org.apache.kafka.common.security.auth.KafkaPrincipal;
-import org.apache.kafka.common.security.auth.SecurityProtocol;
 import org.apache.kafka.metadata.authorizer.StandardAcl;
-import org.apache.kafka.metadata.authorizer.StandardAuthorizer;
 import org.apache.kafka.server.authorizer.Action;
 import org.apache.kafka.server.authorizer.AuthorizableRequestContext;
-import org.apache.kafka.server.authorizer.AuthorizationResult;
 
 /**
  * The ordinary ACLs whose principal is a group, honoured for the group's
  * members.
  *
  * <p>The broker's authorizer stores an ACL of {@code Group:payments} and
- * never matches it, because no client is that principal. The
- * {@code ALLOW} ACLs of groups, and only those, are therefore also fed to a
- * private {@link StandardAuthorizer}, which is asked the request's question
- * once for each group of the principal that has such an ACL, as that group:
- * the resource, the operation and the host are matched by Kafka's own rules.
- * It knows no super user and never allows for want of an ACL.
+ * never matches it, because no client is that principal. The ACLs of groups
+ * are therefore also kept here, by group, and the request's question is
+ * asked once for each group of the principal that has one, as that group:
+ * the resource, the operation and the host are matched by the rules the
+ * broker's authorizer matches an ACL with ({@link AclSet}), and nothing is
+ * written to its log. No super user is known here, and nothing is allowed
+ * for want of an ACL.
  *
  * <p>It only ever adds access, and only to what the broker's authorizer
  * denied: {@link RbacAuthorizer} asks it after the roles, and checks the
@@ -78,31 +73,20 @@ final class GroupAcls implements Closeable {
 
     private final Identities identities;
 
-    /** The {@code ALLOW} ACLs of groups: allows exactly what they allow the group it is asked as. */
-    private final StandardAuthorizer allows = new StandardAuthorizer();
-
-    /** The private authorizer's own metrics; never reported. */
-    private final Metrics metrics = new Metrics();
-
     /** The ACLs of groups by the ID of their record, {@code DENY} ones included. Guarded by {@code this}. */
     private final Map<Uuid, StandardAcl> byId = new HashMap<>();
 
     /** The {@code ALLOW} ACLs of each group that has one. The arrays are never written to once they are here. */
     private volatile ConcurrentHashMap<KafkaPrincipal, StandardAcl[]> allowsOf = new ConcurrentHashMap<>();
 
-    /** How many {@code DENY} ACLs each group has, for the groups that have one. */
-    private volatile ConcurrentHashMap<KafkaPrincipal, Integer> deniesOf = new ConcurrentHashMap<>();
+    /** The {@code DENY} ACLs of each group that has one. The arrays are never written to once they are here. */
+    private volatile ConcurrentHashMap<KafkaPrincipal, StandardAcl[]> deniesOf = new ConcurrentHashMap<>();
 
     /**
      * @param identities which groups a principal is in
      */
     GroupAcls(Identities identities) {
         this.identities = Objects.requireNonNull(identities, "identities");
-        allows.configure(Map.of(StandardAuthorizer.ALLOW_EVERYONE_IF_NO_ACL_IS_FOUND_CONFIG, "false"));
-        allows.withPluginMetrics(new PluginMetricsImpl(metrics, Map.of()));
-        // Asked only for what the broker's authorizer has denied, and it denies nothing before it is
-        // loaded: "not ready" is its answer to give. Until the records arrive this allows nothing.
-        allows.completeInitialLoad();
     }
 
     // --- the metadata thread ---------------------------------------------------
@@ -119,10 +103,9 @@ final class GroupAcls implements Closeable {
         byId.put(id, acl);
         KafkaPrincipal group = group(acl);
         if (acl.permissionType() == AclPermissionType.ALLOW) {
-            allows.addAcl(id, acl);
             allowsOf.merge(group, new StandardAcl[] {acl}, GroupAcls::with);
         } else {
-            deniesOf.merge(group, 1, Integer::sum);
+            deniesOf.merge(group, new StandardAcl[] {acl}, GroupAcls::with);
         }
     }
 
@@ -133,43 +116,33 @@ final class GroupAcls implements Closeable {
             return;
         }
         KafkaPrincipal group = group(acl);
-        if (acl.permissionType() == AclPermissionType.ALLOW) {
-            allowsOf.computeIfPresent(group, (principal, held) -> without(held, acl));
-            allows.removeAcl(id);
-        } else {
-            deniesOf.computeIfPresent(group, (principal, count) -> count == 1 ? null : count - 1);
-        }
+        (acl.permissionType() == AclPermissionType.ALLOW ? allowsOf : deniesOf)
+                .computeIfPresent(group, (principal, held) -> without(held, acl));
     }
 
     /** These are now all the ACLs of groups in the cluster. */
     synchronized void load(Map<Uuid, StandardAcl> acls) {
-        Map<Uuid, StandardAcl> allowing = new HashMap<>();
         Map<KafkaPrincipal, List<StandardAcl>> allowed = new HashMap<>();
-        ConcurrentHashMap<KafkaPrincipal, Integer> denied = new ConcurrentHashMap<>();
-        acls.forEach((id, acl) -> {
-            if (acl.permissionType() == AclPermissionType.ALLOW) {
-                allowing.put(id, acl);
-                allowed.computeIfAbsent(group(acl), group -> new ArrayList<>()).add(acl);
-            } else {
-                denied.merge(group(acl), 1, Integer::sum);
-            }
-        });
-        ConcurrentHashMap<KafkaPrincipal, StandardAcl[]> loaded = new ConcurrentHashMap<>();
-        allowed.forEach((group, list) -> loaded.put(group, list.toArray(new StandardAcl[0])));
-        allows.loadSnapshot(allowing);
-        allowsOf = loaded;
-        deniesOf = denied;
+        Map<KafkaPrincipal, List<StandardAcl>> denied = new HashMap<>();
+        acls.forEach((id, acl) -> (acl.permissionType() == AclPermissionType.ALLOW ? allowed : denied)
+                .computeIfAbsent(group(acl), group -> new ArrayList<>()).add(acl));
+        allowsOf = byGroup(allowed);
+        deniesOf = byGroup(denied);
         byId.clear();
         byId.putAll(acls);
     }
 
+    private static ConcurrentHashMap<KafkaPrincipal, StandardAcl[]> byGroup(
+            Map<KafkaPrincipal, List<StandardAcl>> lists) {
+        ConcurrentHashMap<KafkaPrincipal, StandardAcl[]> arrays = new ConcurrentHashMap<>();
+        lists.forEach((group, list) -> arrays.put(group, list.toArray(new StandardAcl[0])));
+        return arrays;
+    }
+
+    /** Nothing is held but memory: kept so that whoever owns one closes it. */
     @Override
     public void close() throws IOException {
-        try {
-            allows.close();
-        } finally {
-            metrics.close();
-        }
+        // nothing to release
     }
 
     // --- the request path ------------------------------------------------------
@@ -197,17 +170,17 @@ final class GroupAcls implements Closeable {
             return null;
         }
         List<KafkaPrincipal> groups = identities.of(principal);
-        List<Action> quiet = null;
+        String host = null;
         for (int i = 0; i < groups.size(); i++) {
             KafkaPrincipal group = groups.get(i);
-            if (!withAcls.containsKey(group)) {
+            StandardAcl[] held = withAcls.get(group);
+            if (held == null) {
                 continue;
             }
-            if (quiet == null) {
-                quiet = List.of(new Action(action.operation(), action.resourcePattern(),
-                        action.resourceReferenceCount(), false, false));
+            if (host == null) {
+                host = requestContext.clientAddress().getHostAddress();
             }
-            if (allows.authorize(new As(requestContext, group), quiet).get(0) == AuthorizationResult.ALLOWED) {
+            if (AclSet.anyMatches(held, group, host, action.operation(), action.resourcePattern())) {
                 return group;
             }
         }
@@ -230,22 +203,21 @@ final class GroupAcls implements Closeable {
             return List.of();
         }
         List<ResourcePattern> patterns = new ArrayList<>();
+        String host = requestContext.clientAddress().getHostAddress();
         for (KafkaPrincipal group : identities.of(principal)) {
             StandardAcl[] held = withAcls.get(group);
             if (held == null) {
                 continue;
             }
-            As asTheGroup = new As(requestContext, group);
             for (StandardAcl acl : held) {
                 String name = aNameOnlyItCovers(acl);
                 if (acl.resourceType() != resourceType || name == null) {
                     continue;
                 }
                 // Asked about a name that this pattern, or a wider one, covers: the operation and the
-                // host are then matched by the private authorizer, not here.
-                Action quiet = new Action(operation, new ResourcePattern(resourceType, name, PatternType.LITERAL), 1,
-                        false, false);
-                if (allows.authorize(asTheGroup, List.of(quiet)).get(0) == AuthorizationResult.ALLOWED) {
+                // host are then matched as for any request.
+                if (AclSet.anyMatches(held, group, host, operation,
+                        new ResourcePattern(resourceType, name, PatternType.LITERAL))) {
                     patterns.add(new ResourcePattern(resourceType, acl.resourceName(), acl.patternType()));
                 }
             }
@@ -255,26 +227,21 @@ final class GroupAcls implements Closeable {
 
     /**
      * Whether a {@code DENY} ACL of a group of the principal matches the
-     * action. Such an ACL is refused when it is created; one that is in the
-     * metadata anyway is in the authorizer that holds the deny ACLs, which
-     * is asked here as each group that has one.
+     * operation on a literal resource from the host. Such an ACL is refused
+     * when it is created; one that is in the metadata anyway is asked here as
+     * the group it names. A deny ACL of {@code User:*} is not a group's: the
+     * caller asks for it as the principal itself.
      *
-     * @param denies the authorizer that answers {@code DENIED} exactly when a deny ACL matches
-     * @param action the action, as the deny ACLs are asked about it
+     * @param principal the principal of the request, a plain {@link KafkaPrincipal}
      */
-    boolean denied(StandardAuthorizer denies, AuthorizableRequestContext requestContext, Action action) {
-        Map<KafkaPrincipal, Integer> withDenies = deniesOf;
+    boolean denied(KafkaPrincipal principal, String host, AclOperation operation, ResourcePattern resource) {
+        Map<KafkaPrincipal, StandardAcl[]> withDenies = deniesOf;
         if (withDenies.isEmpty()) {
             return false;
         }
-        KafkaPrincipal principal = requestContext.principal();
-        if (principal.getClass() != KafkaPrincipal.class) {
-            principal = new KafkaPrincipal(principal.getPrincipalType(), principal.getName());
-        }
-        List<Action> actions = List.of(action);
         for (KafkaPrincipal group : identities.of(principal)) {
-            if (withDenies.containsKey(group)
-                    && denies.authorize(new As(requestContext, group), actions).get(0) == AuthorizationResult.DENIED) {
+            StandardAcl[] held = withDenies.get(group);
+            if (held != null && AclSet.anyMatches(held, group, host, operation, resource)) {
                 return true;
             }
         }
@@ -321,45 +288,5 @@ final class GroupAcls implements Closeable {
         System.arraycopy(held, 0, rest, 0, at);
         System.arraycopy(held, at + 1, rest, at, rest.length - at);
         return rest;
-    }
-
-    /** The request, asked as one of the groups of its principal. */
-    private record As(AuthorizableRequestContext request, KafkaPrincipal principal)
-            implements AuthorizableRequestContext {
-
-        @Override
-        public String listenerName() {
-            return request.listenerName();
-        }
-
-        @Override
-        public SecurityProtocol securityProtocol() {
-            return request.securityProtocol();
-        }
-
-        @Override
-        public InetAddress clientAddress() {
-            return request.clientAddress();
-        }
-
-        @Override
-        public int requestType() {
-            return request.requestType();
-        }
-
-        @Override
-        public int requestVersion() {
-            return request.requestVersion();
-        }
-
-        @Override
-        public String clientId() {
-            return request.clientId();
-        }
-
-        @Override
-        public int correlationId() {
-            return request.correlationId();
-        }
     }
 }

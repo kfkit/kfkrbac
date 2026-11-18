@@ -322,10 +322,10 @@ final class Access implements AutoCloseable {
             }
         }
         for (AclBinding acl : groupDenies) {
-            load(alone, List.of(acl, everyoneMay(resource.resourceType())));
             load(aloneOfAGroup, acl);
             for (KafkaPrincipal principal : named) {
-                if (aloneOfAGroup.denied(alone, new Asked(asked(principal), host), action)) {
+                if (aloneOfAGroup.denied(asked(principal), host.getHostAddress(), action.operation(),
+                        action.resourcePattern())) {
                     deniedBy.computeIfAbsent(principal, denied -> new ArrayList<>())
                             .add(new Reason(acl, group(acl)));
                 }
@@ -442,12 +442,11 @@ final class Access implements AutoCloseable {
             }
         }
         for (AclBinding acl : groupDenies) {
-            load(alone, List.of(acl, everyoneMay(acl.pattern().resourceType())));
             load(aloneOfAGroup, acl);
             List<AclOperation> operations = new ArrayList<>();
             for (AclOperation operation : Role.everyAclOperation()) {
-                if (aloneOfAGroup.denied(alone, new Asked(principal, host),
-                        action(operation, itsOwnName(acl.pattern())))) {
+                if (aloneOfAGroup.denied(principal, host.getHostAddress(), operation,
+                        action(operation, itsOwnName(acl.pattern())).resourcePattern())) {
                     operations.add(operation);
                 }
             }
