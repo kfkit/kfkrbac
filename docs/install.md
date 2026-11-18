@@ -19,11 +19,13 @@ Connect take the same jar with a line of their own, which is in
 
 - **Kafka 4.1 or later, in KRaft mode.** See
   [Compatibility](../README.md#compatibility).
-- **The jar.** `./gradlew jar` writes `build/libs/kfkrbac-<version>.jar`. It
+- **The jar.** `kfkrbac-<version>.jar` from the
+  [releases page](https://github.com/kfkit/kfkrbac/releases), with its
+  SHA-256 and its signature; [Provenance](provenance/README.md) has the
+  commands that verify them: run them before the jar goes on a node. It
   needs nothing next to it: every class it uses besides its own is in the
-  Kafka distribution. Once there are releases, each will carry the jar, its
-  SHA-256 and a signature, and [Provenance](provenance/README.md) has the
-  commands that verify them: run them before the jar goes on a node.
+  Kafka distribution. `./gradlew jar` builds the same jar from the sources,
+  as `build/libs/kfkrbac-<version>.jar`.
 - **Every node, controllers included.** A role binding is a record in the
   cluster's metadata, like an ACL. A broker reads it to decide a request,
   and the controller decides who may create one. A controller that runs

@@ -4,14 +4,16 @@ Role-based access control for Apache Kafka®: an authorizer that grants access
 through roles and role bindings, on top of the ACLs the broker already has.
 One jar, one line of configuration, free and open source.
 
-> Status: this is what the first release contains, and everything on this
-> page exists: the authorizer for the brokers and controllers, groups, the
-> command, the extension for Kafka Connect and the access metrics. The jar
-> runs as the authorizer of real brokers of Kafka 4.1 to 4.4 in the
-> integration tests, and the commands of the documentation are run there
-> too. What is not there is said [below](#what-is-not-there). Until the
-> release is published, the jar is built from this repository with
-> `./gradlew jar`.
+> Status: 0.1.0, the first release. Everything on this page exists: the
+> authorizer for the brokers and controllers, groups, the command, the
+> extension for Kafka Connect and the access metrics. The jar runs as the
+> authorizer of real brokers of Kafka 4.1 to 4.4 in the integration tests,
+> and the commands of the documentation are run there too; nothing has run
+> on a production cluster yet. What is not there is said
+> [below](#what-is-not-there). The jar, its SHA-256 and its signature are on
+> the [releases page](https://github.com/kfkit/kfkrbac/releases). Until 1.0
+> a setting, a record or a role may still change, and every such change is
+> listed in the [changelog](CHANGELOG.md).
 
 ## Why
 
