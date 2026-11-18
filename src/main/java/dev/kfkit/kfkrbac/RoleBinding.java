@@ -100,7 +100,7 @@ record RoleBinding(Role role, KafkaPrincipal member, Target target, String name,
     }
 
     /** Whether the binding names resources of the broker type at all. */
-    private boolean reaches(ResourceType type) {
+    boolean reaches(ResourceType type) {
         switch (target) {
             case NAMES:
                 return type == ResourceType.TOPIC || type == ResourceType.GROUP

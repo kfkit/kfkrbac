@@ -211,7 +211,7 @@ class RbacAuthorizerMetricsTest {
         assertEquals(DENIED, can("bob", WRITE, INVOICES));
 
         assertEquals(Set.of(), names("kfkwho:*"));
-        assertEquals(List.of(), recorderThreads());
+        assertEquals(List.of(), settledRecorderThreads());
     }
 
     @Test
@@ -224,7 +224,7 @@ class RbacAuthorizerMetricsTest {
         close();
 
         assertEquals(Set.of(), names("kfkwho:*"));
-        assertEquals(List.of(), recorderThreads());
+        assertEquals(List.of(), settledRecorderThreads());
     }
 
     /** kfkwho records on brokers only, and is handed the whole configuration to see what the node is. */
@@ -236,7 +236,7 @@ class RbacAuthorizerMetricsTest {
         assertEquals(ALLOWED, can("bob", READ, INVOICES));
 
         assertEquals(Set.of(), names("kfkwho:*"));
-        assertEquals(List.of(), recorderThreads());
+        assertEquals(List.of(), settledRecorderThreads());
     }
 
     // --- AC3: a wrong value fails configure --------------------------------------
@@ -250,7 +250,7 @@ class RbacAuthorizerMetricsTest {
             assertTrue(failure.getMessage().contains("kfkwho.max.series"), failure.getMessage());
         }
         assertEquals(Set.of(), names("kfkwho:*"));
-        assertEquals(List.of(), recorderThreads());
+        assertEquals(List.of(), settledRecorderThreads());
     }
 
     @Test
@@ -355,6 +355,26 @@ class RbacAuthorizerMetricsTest {
         } catch (JMException e) {
             return 0;
         }
+    }
+
+    /**
+     * The recorder's threads, once those of recorders that are already closed
+     * have had a moment to end: closing asks the thread to stop and does not
+     * wait for it.
+     */
+    private static List<String> settledRecorderThreads() {
+        long deadline = System.currentTimeMillis() + 5_000;
+        List<String> threads = recorderThreads();
+        while (!threads.isEmpty() && System.currentTimeMillis() < deadline) {
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+            threads = recorderThreads();
+        }
+        return threads;
     }
 
     private static List<String> recorderThreads() {

@@ -55,8 +55,10 @@ import org.openjdk.jmh.annotations.TearDown;
  * {@code billing.invoices} by that role and denied what starts with
  * {@code billing.payroll.} by an ACL, which is found, as the denies of a
  * hundred others on each of the two prefixes are passed over. {@code dave}
- * has nothing and is denied by default. The other bindings are those of a
- * thousand applications, each on prefixes of its own.
+ * has nothing and is denied by default. {@code carol} is allowed by an ACL
+ * like {@code alice}, and also holds a role, on a prefix of her own: what
+ * holding any binding adds to a request an ACL allows. The other bindings
+ * are those of a thousand applications, each on prefixes of its own.
  * {@code parentAllowedByAcl} is the broker's own {@link StandardAuthorizer}
  * holding the same records and answering {@code alice}: what an ACL-allowed
  * request costs without roles.
@@ -88,6 +90,7 @@ public class AuthorizeBenchmark {
     private Map<Uuid, StandardAcl> acls;
     private final AuthorizableRequestContext alice = context("alice");
     private final AuthorizableRequestContext bob = context("bob");
+    private final AuthorizableRequestContext carol = context("carol");
     private final AuthorizableRequestContext dave = context("dave");
 
     @Setup(Level.Trial)
@@ -107,6 +110,9 @@ public class AuthorizeBenchmark {
                 AclPermissionType.ALLOW));
         acls.put(Uuid.randomUuid(), acl("User:bob", "billing.payroll.", PatternType.PREFIXED,
                 AclPermissionType.DENY));
+        acls.put(Uuid.randomUuid(), acl("User:carol", "billing.invoices", PatternType.LITERAL,
+                AclPermissionType.ALLOW));
+        acls.put(Uuid.randomUuid(), binding("DeveloperRead:User:carol", "shipping."));
 
         acls.put(Uuid.randomUuid(), binding("DeveloperRead:User:bob", "billing."));
         for (int i = 1; i < bindings; i++) {
@@ -131,6 +137,11 @@ public class AuthorizeBenchmark {
     @Benchmark
     public AuthorizationResult allowedByAcl() {
         return rbac.authorize(alice, READ_INVOICES).get(0);
+    }
+
+    @Benchmark
+    public AuthorizationResult allowedByAclHoldingARole() {
+        return rbac.authorize(carol, READ_INVOICES).get(0);
     }
 
     @Benchmark

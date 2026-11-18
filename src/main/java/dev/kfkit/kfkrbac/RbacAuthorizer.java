@@ -27,6 +27,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 import java.util.function.IntFunction;
 
 import dev.kfkit.kfkrbac.shaded.kfkwho.AccessRecorder;
@@ -91,6 +92,14 @@ import org.slf4j.LoggerFactory;
  * {@code ALLOW} ACL whose principal is a group, which the parent stores and
  * never matches, is honoured for them by {@link GroupAcls}: after the
  * parent has denied, like a role, and never against a deny ACL.
+ *
+ * <p>The log says what was decided. The parent writes "Denied" to the
+ * broker's authorizer log as it answers, before any role or group is asked;
+ * for a principal that holds a binding or is in a group it is asked without
+ * that line, and the line is written once the answer is final: the parent's
+ * own when the request stays denied, {@link RoleAudit}'s "Allowed" when a
+ * role or an ACL of a group allows it. A denial that is final is also
+ * explained, in a log of its own: {@link DeniedLog}.
  *
  * <p>Bindings are created and deleted through the ACL API, and
  * {@link #createAcls} and {@link #deleteAcls}, which the controller calls
@@ -160,6 +169,12 @@ public class RbacAuthorizer extends StandardAuthorizer {
     /** Publishes the verdicts as kfkwho's metrics; null unless {@link #METRICS_ENABLED_CONFIG} is on. */
     private volatile AccessRecorder recorder;
 
+    /** Says why, for every denial that is final. */
+    private final DeniedLog denials;
+
+    /** Says in the broker's authorizer log that a role, or an ACL of a group, allowed a request. */
+    private final RoleAudit audit;
+
     public RbacAuthorizer() {
         this(new BindingIndex());
     }
@@ -168,7 +183,10 @@ public class RbacAuthorizer extends StandardAuthorizer {
         this(bindings, bindings);
     }
 
-    /** For tests: the roles decide as given, whatever the ACL records bind. */
+    /**
+     * For tests: the roles decide as given, whatever the ACL records bind.
+     * The logs still go by the records: who holds a binding, and which.
+     */
     RbacAuthorizer(Roles roles) {
         this(roles, new BindingIndex());
     }
@@ -177,12 +195,17 @@ public class RbacAuthorizer extends StandardAuthorizer {
         this.roles = Objects.requireNonNull(roles, "roles");
         this.bindings = bindings;
         this.groupAcls = bindings.groupAcls();
+        Function<AuthorizableRequestContext, List<RoleBinding>> held = context -> bindings.heldBy(principal(context));
+        this.denials = new DeniedLog(held, (context, action) -> denied(context, action.operation(),
+                action.resourcePattern(), action.resourceReferenceCount()));
+        this.audit = new RoleAudit(held, (context, action) -> groupAcls.allowing(context, principal(context), action));
         denies.withPluginMetrics(new PluginMetricsImpl(denyMetrics, Map.of()));
         denies.loadSnapshot(ALLOW_EVERYTHING);
     }
 
     @Override
     public void configure(Map<String, ?> configs) {
+        denials.configure(configs);
         super.configure(configs);
         Map<String, Object> denyConfigs = new HashMap<>(configs);
         denyConfigs.remove(SUPER_USERS_CONFIG);
@@ -262,15 +285,26 @@ public class RbacAuthorizer extends StandardAuthorizer {
 
     @Override
     public List<AuthorizationResult> authorize(AuthorizableRequestContext requestContext, List<Action> actions) {
-        List<AuthorizationResult> results = super.authorize(requestContext, actions);
+        // The parent's "Denied" is not final for a principal that holds a binding or is in a group: it is asked
+        // without that line.
+        List<Action> asked = holdsMoreThanItsAcls(requestContext) && ACLS_ONLY.get() == null
+                ? RoleAudit.withoutDeniedLine(actions)
+                : actions;
+        List<AuthorizationResult> results = super.authorize(requestContext, asked);
         List<AuthorizationResult> granted = null;
         for (int i = 0; i < results.size(); i++) {
-            if (results.get(i) == AuthorizationResult.DENIED && ACLS_ONLY.get() == null
-                    && roleAllows(requestContext, actions.get(i))) {
-                if (granted == null) {
-                    granted = new ArrayList<>(results);
+            if (results.get(i) == AuthorizationResult.DENIED && ACLS_ONLY.get() == null) {
+                Action action = actions.get(i);
+                if (roleAllows(requestContext, action)) {
+                    if (granted == null) {
+                        granted = new ArrayList<>(results);
+                    }
+                    granted.set(i, AuthorizationResult.ALLOWED);
+                    audit.allowed(requestContext, action);
+                } else if (asked != actions && action.logIfDenied()) {
+                    // Final now: asked again as the broker asked it, for the parent's own line and nothing else.
+                    super.authorize(requestContext, List.of(action));
                 }
-                granted.set(i, AuthorizationResult.ALLOWED);
             }
         }
         List<AuthorizationResult> verdicts = granted == null ? results : granted;
@@ -280,6 +314,21 @@ public class RbacAuthorizer extends StandardAuthorizer {
             recorder.record(requestContext, actions, verdicts);
         }
         return verdicts;
+    }
+
+    /**
+     * Whether a binding applies to the principal or it is in a group, so
+     * that something but the ACLs that name it could allow it a request: a
+     * lookup or two, before the parent is asked. A binding or a membership
+     * created between this and the roles' answer may leave one "Denied"
+     * line for a request that was allowed.
+     */
+    private boolean holdsMoreThanItsAcls(AuthorizableRequestContext requestContext) {
+        try {
+            return bindings.holdsAny(principal(requestContext));
+        } catch (RuntimeException e) {
+            return false; // the roles fail the same way when they are asked, and that is logged and denied
+        }
     }
 
     /**
@@ -304,26 +353,31 @@ public class RbacAuthorizer extends StandardAuthorizer {
         if (parent == AuthorizationResult.ALLOWED) {
             return parent;
         }
+        DeniedLog.Cause cause = DeniedLog.Cause.NOT_GRANTED;
         try {
             KafkaPrincipal principal = principal(requestContext);
-            if (keptForSystemAdmin(requestContext, op, resourceType)
-                    && !bindings.holds(principal, Role.SYSTEM_ADMIN)) {
-                return AuthorizationResult.DENIED;
-            }
-            for (ResourcePattern pattern : roles.grantedPatterns(principal, op, resourceType)) {
-                if (!coveredByDeny(requestContext, op, pattern)) {
-                    return AuthorizationResult.ALLOWED;
+            if (!keptForSystemAdmin(requestContext, op, resourceType)
+                    || bindings.holds(principal, Role.SYSTEM_ADMIN)) {
+                for (ResourcePattern pattern : roles.grantedPatterns(principal, op, resourceType)) {
+                    if (!coveredByDeny(requestContext, op, pattern)) {
+                        return AuthorizationResult.ALLOWED;
+                    }
+                    cause = DeniedLog.Cause.DENY_ACL;
                 }
-            }
-            for (ResourcePattern pattern : groupAcls.allowedPatterns(requestContext, principal, op, resourceType)) {
-                if (!coveredByDeny(requestContext, op, pattern)) {
-                    return AuthorizationResult.ALLOWED;
+                for (ResourcePattern pattern : groupAcls.allowedPatterns(requestContext, principal, op,
+                        resourceType)) {
+                    if (!coveredByDeny(requestContext, op, pattern)) {
+                        return AuthorizationResult.ALLOWED;
+                    }
+                    cause = DeniedLog.Cause.DENY_ACL;
                 }
             }
         } catch (RuntimeException e) {
             LOG.error("Role lookup failed for {} {} on any {}; denied", requestContext.principal(), op,
                     resourceType, e);
+            cause = DeniedLog.Cause.ROLES_FAILED;
         }
+        denials.deniedOnAnyResource(requestContext, op, resourceType, cause);
         return AuthorizationResult.DENIED;
     }
 
@@ -461,9 +515,11 @@ public class RbacAuthorizer extends StandardAuthorizer {
     /**
      * Whether a role grants an action the parent denied, or lets its holder
      * through to the ACL API, or an ACL of a group of the principal allows
-     * it, and no deny ACL matches it.
+     * it, and no deny ACL matches it. When not, the denial is final, and
+     * {@link DeniedLog} is told.
      */
     private boolean roleAllows(AuthorizableRequestContext requestContext, Action action) {
+        boolean consulted = true;
         try {
             KafkaPrincipal principal = principal(requestContext);
             boolean granted = roles.grants(principal, action);
@@ -479,14 +535,18 @@ public class RbacAuthorizer extends StandardAuthorizer {
                         action.resourcePattern().resourceType())
                         && groupAcls.allows(requestContext, principal, action);
             }
-            return granted
+            if (granted
                     && !denied(requestContext, action.operation(), action.resourcePattern(),
-                            action.resourceReferenceCount());
+                            action.resourceReferenceCount())) {
+                return true;
+            }
         } catch (RuntimeException e) {
             LOG.error("Role lookup failed for {} {} on {}; denied", requestContext.principal(),
                     action.operation(), action.resourcePattern(), e);
-            return false;
+            consulted = false;
         }
+        denials.denied(requestContext, action, consulted);
+        return false;
     }
 
     /**
@@ -498,7 +558,7 @@ public class RbacAuthorizer extends StandardAuthorizer {
      * has bound. The same question with any other request type is not this
      * check: the role opens the ACL API, not the cluster.
      */
-    private static boolean opensTheAclApi(AuthorizableRequestContext requestContext, Action action) {
+    static boolean opensTheAclApi(AuthorizableRequestContext requestContext, Action action) {
         ResourcePattern resource = action.resourcePattern();
         if (resource.resourceType() != ResourceType.CLUSTER || resource.patternType() != PatternType.LITERAL
                 || !Resource.CLUSTER_NAME.equals(resource.name())) {
@@ -524,7 +584,7 @@ public class RbacAuthorizer extends StandardAuthorizer {
      * and are not here: {@link #createAcls} and {@link #deleteAcls} decide
      * them, with a reason for the caller.
      */
-    private static boolean keptForSystemAdmin(AuthorizableRequestContext requestContext, AclOperation operation,
+    static boolean keptForSystemAdmin(AuthorizableRequestContext requestContext, AclOperation operation,
             ResourceType resourceType) {
         return operation == AclOperation.ALTER && resourceType == ResourceType.CLUSTER
                 && requestContext.requestType() == ApiKeys.ALTER_USER_SCRAM_CREDENTIALS.id;
