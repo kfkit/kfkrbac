@@ -129,9 +129,65 @@ defect, not a trade-off. The map:
   schema registry, and reads the same bindings. A binding for them carries
   the resource type in its name (`Subject:orders-`), which no topic can be
   called: a colon is not legal in a topic name.
-- **Schema Registry first.** Of the schema registries, the first one
-  supported is Schema Registry, the one extended through
-  `resource.extension.class`. Others may follow.
+- **The roles.** Seven, under names operators already use for role-based
+  access to Kafka where such a name exists: `DeveloperRead`,
+  `DeveloperWrite`, `DeveloperManage`, `ResourceOwner` and, of our own,
+  `ResourceViewer` are bound to a name pattern; `ClusterAdmin` and
+  `SystemAdmin` are bound to the cluster. What each grants is in
+  `docs/roles.md`, and a test fails when the table and the code disagree. A
+  role's meaning never changes once released: a different set of permissions
+  gets a different name. Operators do not define roles of their own in the
+  first release; a group that ordinary ACLs name does that job.
+- **Who may bind what.** A principal in `super.users`, or one that holds
+  `SystemAdmin`: anything. A `ResourceOwner`: any role that is bound to a
+  name pattern, `ResourceOwner` included, on patterns inside what it owns,
+  and it may delete those bindings; it may not bind a cluster role, touch a
+  group or create an ordinary ACL. Everyone else: nothing.
+- **The record.** Principal `<Role>:<member>`. Resource type `TOPIC`: the
+  name pattern, for every resource type the role grants; `GROUP` or
+  `TRANSACTIONAL_ID`: the same, narrowed to that type; `CLUSTER` named
+  `kafka-cluster`: a cluster role. What is not a broker resource has its type
+  in front of the name: `Subject:orders-`, `Connector:billing-`. Operation,
+  permission and host are always `ALL`, `ALLOW` and `*`; anything else is
+  refused when the record is created. The role names and `Member` are
+  reserved as principal types.
+- **Groups.** Membership is a record of the same kind: principal
+  `Member:User:alice`, resource type `TOPIC`, literal name `Group:payments`.
+  A group can be the member of a binding (`DeveloperRead:Group:payments`) and
+  the principal of an ordinary `ALLOW` ACL, which this authorizer honours for
+  its members; a `DENY` ACL that names a group is refused when it is created,
+  because the parent would not apply it. Only `super.users` and `SystemAdmin`
+  manage membership. Groups carried by the principal itself come later.
+- **What a delegate sees and deletes.** To use the ACL tool a resource owner
+  must be allowed to list ACLs, and the listing cannot be narrowed to the
+  caller: it sees every ACL and binding of the cluster. A delegate's delete
+  goes through only when every record its filters match is a binding inside
+  what it owns; otherwise nothing is deleted and the reason is returned.
+- **The command.** A class in the same jar, run with the distribution's
+  `kafka-run-class.sh dev.kfkit.kfkrbac.RbacCommand`, with the flags of the
+  ACL tool. It speaks to the cluster through `AdminClient` only. Verbs:
+  `bind`, `unbind`, `list`, `who-can`, `what-can`, `group`, `apply`,
+  `import`.
+- **Schemas and connectors.** A REST extension for Kafka Connect
+  (`ConnectRestExtension`) and one for Schema Registry
+  (`SchemaRegistryResourceExtension`, enabled with
+  `resource.extension.class`), both in the same jar. Each reads the bindings
+  with `AdminClient`, refreshes them every few seconds and shows their age as
+  a metric. The caller is whoever the component authenticated, the user of
+  HTTP basic authentication or the subject of the client certificate, as
+  `User:<name>`; an anonymous request is refused. Bindings apply to every
+  Connect cluster and registry that reads this Kafka cluster. Other
+  registries may follow.
+- **Bringing bindings over.** `import` reads files only, in two shapes,
+  documented by their fields and never by where they come from: a list of
+  bindings of named roles, written as bindings; and roles that are sets of
+  ACLs, written as a group with the role's users and ordinary ACLs that name
+  the group. What cannot be mapped is skipped and reported, never guessed.
+- **The first release is everything above.** The broker's authorizer,
+  groups, the command with `apply` and `import`, the extensions for Kafka
+  Connect and Schema Registry, and kfkwho's metrics. It is a GitHub Release
+  with a signed jar; Maven Central follows when the namespace and the
+  credentials exist.
 - **Existing role bindings must be easy to bring over.** That matters more
   than looking the same as anything else: where a familiar name or shape
   costs nothing it is kept, and where it would bring a known trouble with it
@@ -143,21 +199,9 @@ defect, not a trade-off. The map:
 
 ## Not decided
 
-Do not assume any of these; each has its own issue and waits for the
-maintainer's answer.
-
-- Which roles exist, what each grants, and how operators define their own
-  (#3).
-- How groups are resolved for a principal (#4).
-- The exact encoding of a binding in an ACL record, what a delegate may see
-  and delete, and what is still to be shown on a cluster of several nodes
-  (#5).
-- The command: what it does on top of the ACL tool (#6).
-- Schemas and connectors: how Kafka Connect and Schema Registry are
-  plugged into, who the caller of a REST request is, and how fresh the
-  bindings are there (#8).
-- Bringing existing role bindings over: the formats read and how they are
-  documented (#9).
+Nothing is waiting for an answer. A question that comes up while building
+goes to the maintainer in its own issue, labelled `needs-human`; it is not
+settled in a pull request.
 
 ## Corrections
 
