@@ -33,6 +33,11 @@ major version is 0.
 - No role but `SystemAdmin` lets its holder replace a user's SCRAM
   credentials: for `AlterUserScramCredentials`, `ClusterAdmin` does not
   grant `ALTER` on the cluster.
+- An integration-test suite that runs the built jar as the authorizer of
+  real brokers in containers, on Kafka 4.1.2, 4.2.2, 4.3.1 and 4.4.0 and on a
+  cluster of a controller and several brokers: `./gradlew integrationTest`,
+  `-PbrokerVersion=4.1.2` for another release. It needs Docker and is skipped
+  without it; `./gradlew check -PintegrationTest` makes it part of `check`.
 - A release workflow: a `vX.Y.Z` tag runs the whole check and publishes a
   GitHub Release with the jar, its SHA-256, a keyless cosign signature and a
   build provenance attestation. How to verify a released jar is in

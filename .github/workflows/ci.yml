@@ -25,3 +25,55 @@ jobs:
         with:
           name: test-reports
           path: build/reports/tests/
+
+  # The built jar as the authorizer of a real broker, one job per supported
+  # release: the three the project supports and the one the jar is compiled
+  # against (kafkaVersion in build.gradle.kts). The job names are what the
+  # ruleset requires; keep them stable.
+  integration:
+    name: integration (${{ matrix.kafka }})
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        kafka: ["4.1.2", "4.2.2", "4.3.1", "4.4.0"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v6
+      - run: ./gradlew integrationTest --tests '*BrokerIT' -PbrokerVersion=${{ matrix.kafka }} --no-daemon
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-reports-${{ matrix.kafka }}
+          path: |
+            build/reports/tests/
+            build/integration-logs/
+
+  # The same on a cluster of several nodes, a controller and brokers in
+  # containers of their own, of the newest release.
+  integration-cluster:
+    name: integration (cluster)
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v6
+      - run: ./gradlew integrationTest --tests '*ClusterIT' --no-daemon
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-reports-cluster
+          path: |
+            build/reports/tests/
+            build/integration-logs/
