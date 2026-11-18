@@ -384,7 +384,9 @@ final class DeniedLog {
      * The roles the principal holds that name resources of the type, each
      * with what it is bound to, in the words of the command. One whose role
      * does not grant the operation on the type says so; the others grant it,
-     * on a pattern that does not cover what was asked for.
+     * on a pattern that does not cover what was asked for. When none names
+     * resources of the type, how many it holds for other types is said, so
+     * that "none" for the cluster is not read as "no role at all".
      */
     private static void rolesHeld(StringBuilder line, KafkaPrincipal principal, List<RoleBinding> bindings,
             AclOperation operation, ResourceType resourceType) {
@@ -416,7 +418,14 @@ final class DeniedLog {
             }
         }
         if (named == 0) {
+            // "none" alone reads as "holds no role at all" to whoever knows the principal's roles on topics.
+            int elsewhere = bindings.size();
             line.append("none");
+            if (elsewhere == 1) {
+                line.append(" (its one role binding is for another resource type)");
+            } else if (elsewhere > 1) {
+                line.append(" (its ").append(elsewhere).append(" role bindings are for other resource types)");
+            }
         } else if (more > 0) {
             line.append(", and ").append(more).append(" more");
         }

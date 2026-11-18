@@ -16,6 +16,16 @@ major version is 0.
   listing of all topics no longer leaves one for `DESCRIBE`. A producer
   that is refused is still recorded as denied. See
   [docs/metrics.md](docs/metrics.md#what-is-recorded).
+- A member of a group that an ACL allows `ALTER` on the cluster, refused
+  when it creates or deletes an ACL record, is no longer told only that it
+  is not a principal the ACLs allow `ALTER` on the cluster: the reason
+  names the group and says that an ACL of a group does not make its
+  members managers of access. See [docs/groups.md](docs/groups.md).
+- The line of `dev.kfkit.kfkrbac.denied` that says `roles held for
+  CLUSTER: none`, or `none` for any other type, now says how many role
+  bindings the principal holds for other resource types, so that it does
+  not read as "this principal holds no role at all". See
+  [docs/troubleshooting.md](docs/troubleshooting.md).
 
 ## 0.1.0 - 2026-11-18
 

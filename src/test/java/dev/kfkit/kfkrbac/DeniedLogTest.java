@@ -190,8 +190,34 @@ class DeniedLogTest {
         log.denied(BOB, read(TOPIC, "orders"), true);
         log.denied(BOB, read(GROUP, "orders"), true);
 
-        assertTrue(lines.get(0).endsWith("; roles held for TOPIC: none"), lines.get(0));
+        assertTrue(lines.get(0).endsWith("; roles held for TOPIC: none (its 2 role bindings are for other resource"
+                + " types)"), lines.get(0));
         assertTrue(lines.get(1).endsWith("; roles held for GROUP: DeveloperRead on groups with prefix billing."), lines.get(1));
+    }
+
+    /**
+     * Both ways. A cluster question asked of a principal that holds roles on
+     * topics does not read as "it holds no role at all"; asked of one that
+     * holds none, it does.
+     */
+    @Test
+    void noRoleForTheClusterIsNotNoRoleAtAll() {
+        AuthorizableRequestContext creating = RequestContext.of("bob", "billing-1", ApiKeys.CREATE_ACLS);
+        Action alter = new Action(ALTER, new ResourcePattern(CLUSTER, "kafka-cluster", PatternType.LITERAL), 1, true,
+                true);
+        held = List.of(binding("DeveloperRead:User:bob", TOPIC, "billing.", PatternType.PREFIXED));
+        log(100).denied(creating, alter, true);
+        held = List.of(binding("DeveloperRead:User:bob", TOPIC, "billing.", PatternType.PREFIXED),
+                binding("DeveloperWrite:Group:payments", TOPIC, "orders", PatternType.LITERAL));
+        log(100).denied(creating, alter, true);
+        held = List.of();
+        log(100).denied(creating, alter, true);
+
+        String head = "Denied User:bob ALTER on CLUSTER 'kafka-cluster' (request CreateAcls): "
+                + "no ACL and no role allows it; roles held for CLUSTER: ";
+        assertEquals(List.of(head + "none (its one role binding is for another resource type)",
+                head + "none (its 2 role bindings are for other resource types)",
+                head + "none"), lines);
     }
 
     @Test
