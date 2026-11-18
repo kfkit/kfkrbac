@@ -27,6 +27,9 @@ import java.util.concurrent.ExecutionException;
 import org.apache.kafka.clients.CommonClientConfigs;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.clients.admin.ScramCredentialInfo;
+import org.apache.kafka.clients.admin.ScramMechanism;
+import org.apache.kafka.clients.admin.UserScramCredentialUpsertion;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.KafkaProducer;
@@ -43,6 +46,7 @@ import org.apache.kafka.common.config.SaslConfigs;
 import org.apache.kafka.common.errors.AuthorizationException;
 import org.apache.kafka.common.errors.InvalidReplicaAssignmentException;
 import org.apache.kafka.common.resource.PatternType;
+import org.apache.kafka.common.resource.Resource;
 import org.apache.kafka.common.resource.ResourcePattern;
 import org.apache.kafka.common.resource.ResourceType;
 import org.apache.kafka.common.serialization.StringDeserializer;
@@ -54,6 +58,10 @@ import org.apache.kafka.common.serialization.StringSerializer;
  * Anything but "allowed" or "refused" fails the test with what happened.
  */
 final class Clients {
+
+    /** The cluster as a resource of ACLs and of the bindings of cluster roles. */
+    private static final ResourcePattern CLUSTER =
+            new ResourcePattern(ResourceType.CLUSTER, Resource.CLUSTER_NAME, PatternType.LITERAL);
 
     /** How long a client waits for the cluster before the test fails. */
     private static final Duration TIMEOUT = Duration.ofSeconds(30);
@@ -79,6 +87,24 @@ final class Clients {
                 new AccessControlEntry("User:" + user, "*", AclOperation.ALL, AclPermissionType.DENY));
     }
 
+    /** A binding of a cluster role as the ACL it is: {@code ClusterAdmin:User:alice} on the cluster. */
+    static AclBinding clusterBinding(String role, String user) {
+        return new AclBinding(CLUSTER,
+                new AccessControlEntry(role + ":User:" + user, "*", AclOperation.ALL, AclPermissionType.ALLOW));
+    }
+
+    /** An ordinary ACL that allows the user the operation on the topic of that name. */
+    static AclBinding allow(String user, AclOperation operation, String topic) {
+        return new AclBinding(new ResourcePattern(ResourceType.TOPIC, topic, PatternType.LITERAL),
+                new AccessControlEntry("User:" + user, "*", operation, AclPermissionType.ALLOW));
+    }
+
+    /** An ordinary ACL that allows the user the operation on the cluster. */
+    static AclBinding allowOnCluster(String user, AclOperation operation) {
+        return new AclBinding(CLUSTER,
+                new AccessControlEntry("User:" + user, "*", operation, AclPermissionType.ALLOW));
+    }
+
     /** Creates the ACLs, role bindings among them, through {@code AdminClient}. */
     void createAcls(AclBinding... acls) {
         try (Admin admin = admin()) {
@@ -98,6 +124,18 @@ final class Clients {
             return new HashSet<>(acls);
         } catch (ExecutionException e) {
             throw new AssertionError("listing the ACLs as " + Node.ADMIN + " failed: " + e.getCause(), e.getCause());
+        } catch (InterruptedException e) {
+            throw interrupted(e);
+        }
+    }
+
+    /** The users that have SCRAM credentials, as {@code AdminClient} lists them for the super user. */
+    Set<String> usersWithScramCredentials() {
+        try (Admin admin = admin()) {
+            return new HashSet<>(admin.describeUserScramCredentials().all().get().keySet());
+        } catch (ExecutionException e) {
+            throw new AssertionError("listing the SCRAM credentials as " + Node.ADMIN + " failed: " + e.getCause(),
+                    e.getCause());
         } catch (InterruptedException e) {
             throw interrupted(e);
         }
@@ -141,6 +179,52 @@ final class Clients {
     }
 
     // --- asking as a user ------------------------------------------------------
+
+    /** Creates the ACLs, role bindings among them, through an {@code AdminClient} of the user's own. */
+    Answer createAcls(String user, AclBinding... acls) {
+        String request = user + " creating " + List.of(acls);
+        try (Admin admin = admin(user)) {
+            admin.createAcls(List.of(acls)).all().get();
+            return Answer.allowed(request);
+        } catch (ExecutionException e) {
+            return refusal(request, e);
+        } catch (InterruptedException e) {
+            throw interrupted(e);
+        }
+    }
+
+    /**
+     * Deletes the ACLs the filters match, role bindings among them, through
+     * an {@code AdminClient} of the user's own.
+     */
+    Deletion deleteAcls(String user, AclBindingFilter... filters) {
+        String request = user + " deleting the ACLs that match " + List.of(filters);
+        try (Admin admin = admin(user)) {
+            Collection<AclBinding> deleted = admin.deleteAcls(List.of(filters)).all().get();
+            return new Deletion(Answer.allowed(request), new HashSet<>(deleted));
+        } catch (ExecutionException e) {
+            return new Deletion(refusal(request, e), Set.of());
+        } catch (InterruptedException e) {
+            throw interrupted(e);
+        }
+    }
+
+    /**
+     * Replaces the SCRAM credentials of {@code of}, which is how a password
+     * is set: whoever may do that to a super user can become one.
+     */
+    Answer replaceScramCredentials(String user, String of) {
+        String request = user + " replacing the SCRAM credentials of " + of;
+        try (Admin admin = admin(user)) {
+            admin.alterUserScramCredentials(List.of(new UserScramCredentialUpsertion(of,
+                    new ScramCredentialInfo(ScramMechanism.SCRAM_SHA_256, 4096), "chosen-by-" + user))).all().get();
+            return Answer.allowed(request);
+        } catch (ExecutionException e) {
+            return refusal(request, e);
+        } catch (InterruptedException e) {
+            throw interrupted(e);
+        }
+    }
 
     /** Sends one record with a producer of the default configuration, which is idempotent. */
     Answer produce(String user, String topic) {
@@ -233,7 +317,11 @@ final class Clients {
     // ---------------------------------------------------------------------------
 
     private Admin admin() {
-        return Admin.create(client(Node.ADMIN));
+        return admin(Node.ADMIN);
+    }
+
+    private Admin admin(String user) {
+        return Admin.create(client(user));
     }
 
     private Map<String, Object> producer(String user) {
