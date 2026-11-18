@@ -25,6 +25,8 @@ import java.io.PrintStream;
 import java.io.UncheckedIOException;
 import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -98,6 +100,22 @@ final class Commands {
     static boolean authorizerAllows(Collection<AclBinding> records, String user, AclOperation operation,
             ResourcePattern resource) {
         return authorizerAllows(records, user, operation, resource, "127.0.0.1");
+    }
+
+    /**
+     * What a document shows as the output of a command: the text block it
+     * marks as the output of the {@code bash} block that is this command
+     * and nothing else. {@code DocsIT} runs the same block against a broker.
+     */
+    static String documented(Path document, String command) throws IOException {
+        String page = Files.readString(document);
+        String block = "```bash\n" + command + "\n```\n\n<!-- output -->\n```text\n";
+        int at = page.indexOf(block);
+        if (at < 0) {
+            throw new AssertionError(document + " does not show `" + command + "` with its output");
+        }
+        int from = at + block.length();
+        return page.substring(from, page.indexOf("```", from));
     }
 
     /** What an authorizer answers a user's ordinary request from that address that a broker fed those records. */

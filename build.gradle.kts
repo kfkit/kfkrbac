@@ -282,9 +282,10 @@ jmh {
 
 tasks.test {
     useJUnitPlatform()
-    // RoleTest compares these with the code and DocsTest follows their links:
-    // a change to them alone reruns the tests.
-    inputs.files(fileTree("docs"), "README.md")
+    // RoleTest and SettingsDocTest compare these with the code, DocsTest
+    // follows their links and checks that DocsIT has a test for each page
+    // that marks commands as run: a change to them alone reruns the tests.
+    inputs.files(fileTree("docs"), "README.md", "src/integrationTest/java/dev/kfkit/kfkrbac/DocsIT.java")
         .withPropertyName("docs")
         .withPathSensitivity(PathSensitivity.RELATIVE)
     // MetricsDocTest compares these with the code and with the kfkwho bundled.

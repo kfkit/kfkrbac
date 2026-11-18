@@ -3,11 +3,10 @@
 `RbacCommand` manages role bindings and groups in an operator's own terms,
 answers two questions, who can do this and what may this principal do,
 keeps bindings in a file, and brings bindings over from a file of another
-shape. It is a
-class in the same jar as the authorizer, run with the script the Kafka
-distribution ships:
+shape. It is a class in the same jar as the authorizer, run with the script
+the distribution of Apache Kafka® ships:
 
-```bash
+```text
 kafka-run-class.sh dev.kfkit.kfkrbac.RbacCommand <verb> --bootstrap-server localhost:9092 [options]
 ```
 
@@ -18,20 +17,21 @@ It talks to the cluster through the admin client only, with three calls:
 list ACLs, create ACLs, delete ACLs. So it needs no access the ACL tool
 would not need, the cluster refuses what the caller may not do, and
 everything it does can be done with the ACL tool as well: a binding is an
-ACL record ([roles.md](roles.md)), and so is a membership of a group
-([groups.md](groups.md)). The command is a convenience, never the only way.
+ACL record ([Bindings](bindings.md)), and so is a membership of a group
+([Groups](groups.md)). The command is a convenience, never the only way.
 
-> Status: every verb of the table exists, and runs against real brokers of
-> every supported release in the integration suite.
+> Status: every command of this page is run by a test of the integration
+> suite (`DocsIT`) on a broker of the newest supported release, and the
+> output shown is what the commands printed there.
 
 | Verb | Does |
 |---|---|
 | [`bind`](#bind) | binds a role to a member |
 | [`unbind`](#unbind) | removes one binding |
 | [`list`](#list) | lists the bindings |
-| [`group add`](#group-add-group-remove) | puts a member in a group |
-| [`group remove`](#group-add-group-remove) | takes a member out of a group |
+| [`group add`](#group-add) | puts a member in a group |
 | [`group list`](#group-list) | lists the groups and their members |
+| [`group remove`](#group-remove) | takes a member out of a group |
 | [`who-can`](#who-can) | who may do an operation on a resource, and why |
 | [`what-can`](#what-can) | what a principal may do, and why |
 | [`apply`](#apply) | makes the bindings and the groups of the cluster those of a file |
@@ -57,21 +57,46 @@ and `group list` are verbs of two words.
 | 1 | the cluster refused, or the call failed; the reason the cluster returned is printed |
 | 2 | wrong usage: what is wrong and the usage of the verb are printed; or a file that `apply` or `import` cannot read as what it must be: the place and the field are printed |
 
-The examples below leave out `--bootstrap-server` and `--command-config`,
-and write `rbac` for `kafka-run-class.sh dev.kfkit.kfkrbac.RbacCommand`.
+## The cluster of the examples
+
+One node at `localhost:9092` that runs `RbacAuthorizer`
+([Installation](install.md)), with three users: `User:admin`, who is in
+`super.users`, `User:alice` and `User:bob`, whom no ACL names. Each has a
+file of client properties for the tools: `admin.properties`,
+`alice.properties` and `bob.properties`. Kafka's `bin` is on the `PATH`, and
+the commands are run in a copy of this repository, for the files of
+`docs/examples/`. The cluster has no ACL and no binding.
+
+The examples write `rbac` for the command with the connection of
+`User:admin`, and `rbac_as bob` for the same as `User:bob`:
+
+<!-- run: session -->
+```bash
+rbac_as() {
+  user=$1; shift
+  kafka-run-class.sh dev.kfkit.kfkrbac.RbacCommand "$@" \
+    --bootstrap-server localhost:9092 --command-config "$user.properties"
+}
+rbac() { rbac_as admin "$@"; }
+```
 
 ## bind
 
 Binds a role to a member. Binding what is bound already changes nothing.
 
-```console
-$ rbac bind --role DeveloperRead --member User:alice --prefix billing.
+<!-- run -->
+```bash
+rbac bind --role DeveloperRead --member User:alice --prefix billing.
+```
+
+<!-- output -->
+```text
 Bound DeveloperRead to User:alice on prefix billing.
 ```
 
 | Option | Meaning |
 |---|---|
-| `--role <role>` | one of the seven roles of [roles.md](roles.md); required |
+| `--role <role>` | one of the seven [roles](roles.md); required |
 | `--member <type:name>` | who gets the role: `User:alice`, or a group, `Group:payments`; required |
 | `--prefix <prefix>` | every name that starts with the prefix |
 | `--name <name>` | that one name; `*` is every name |
@@ -84,42 +109,84 @@ A role that is bound to a name pattern takes `--prefix` or `--name`, and the
 pattern covers topics, groups and transactional IDs unless one of the last
 four options narrows it. A role that is bound to the cluster takes neither:
 
-```console
-$ rbac bind --role ClusterAdmin --member User:carol
-Bound ClusterAdmin to User:carol on the cluster
-$ rbac bind --role DeveloperWrite --member User:bob --name billing-1 --transactional-id-only
+<!-- run -->
+```bash
+rbac bind --role ClusterAdmin --member User:bob
+rbac bind --role DeveloperWrite --member User:bob --name billing-1 --transactional-id-only
+rbac bind --role DeveloperManage --member User:alice --prefix billing- --connector
+rbac bind --role DeveloperRead --member User:alice --prefix orders- --subject
+```
+
+<!-- output -->
+```text
+Bound ClusterAdmin to User:bob on the cluster
 Bound DeveloperWrite to User:bob on transactional ID billing-1
-$ rbac bind --role DeveloperRead --member User:alice --prefix orders- --subject
+Bound DeveloperManage to User:alice on connectors with prefix billing-
 Bound DeveloperRead to User:alice on subjects with prefix orders-
 ```
 
-What it writes is the record of the binding, the one the ACL tool would
-write with `--allow-principal 'DeveloperRead:User:alice' --operation All
---topic billing. --resource-pattern-type prefixed`.
+A binding for connectors is read by the extension for
+[Kafka Connect](connect.md). A binding for subjects can be written, listed
+and removed, and nothing reads it: there is no extension for a schema
+registry.
 
-A cluster that refuses says why, and the status is 1. Here `User:bob` holds
-`ResourceOwner` on the prefix `billing.` and binds outside it:
+What `bind` writes is the record of the binding, the one the ACL tool would
+write with `--allow-principal DeveloperRead:User:alice --operation All
+--topic billing. --resource-pattern-type prefixed`
+([Bindings](bindings.md)).
 
-```console
-$ rbac bind --command-config bob.properties --role DeveloperWrite --member User:alice --prefix payments.
-error: ClusterAuthorizationException: User:bob may not create DeveloperWrite:User:alice on the TOPIC prefix 'payments.': none of the ResourceOwner bindings of User:bob covers that pattern; it owns the TOPIC prefix 'billing.'
-$ echo $?
-1
+A cluster that refuses says why, and the status is 1. `User:bob` is made
+the owner of the prefix `billing.` and binds outside it:
+
+<!-- run -->
+```bash
+rbac bind --role ResourceOwner --member User:bob --prefix billing.
 ```
+
+<!-- output -->
+```text
+Bound ResourceOwner to User:bob on prefix billing.
+```
+
+<!-- run: exit 1 -->
+```bash
+rbac_as bob bind --role DeveloperWrite --member User:alice --name orders
+```
+
+<!-- output -->
+```text
+error: ClusterAuthorizationException: User:bob may not create DeveloperWrite:User:alice on the TOPIC name 'orders': none of the ResourceOwner bindings of User:bob covers that pattern; it owns the TOPIC prefix 'billing.'
+```
+
+A principal that holds no role and that no ACL lets alter the cluster is
+refused earlier, by the broker's own check and in the broker's own words:
+see [Who may run it](#who-may-run-it).
 
 ## unbind
 
 Takes the options of `bind` and removes exactly the binding that `bind`
-with the same options creates, and nothing else. It fails when there is no
-such binding.
+with the same options creates, and nothing else.
 
-```console
-$ rbac unbind --role DeveloperRead --member User:alice --prefix billing.
-Unbound DeveloperRead to User:alice on prefix billing.
-$ rbac unbind --role DeveloperRead --member User:alice --prefix payments.
-error: no such binding: DeveloperRead to User:alice on prefix payments.
-$ echo $?
-1
+<!-- run -->
+```bash
+rbac unbind --role ResourceOwner --member User:bob --prefix billing.
+```
+
+<!-- output -->
+```text
+Unbound ResourceOwner to User:bob on prefix billing.
+```
+
+It fails, with the status 1, when there is no such binding:
+
+<!-- run: exit 1 -->
+```bash
+rbac unbind --role ResourceOwner --member User:bob --prefix billing.
+```
+
+<!-- output -->
+```text
+error: no such binding: ResourceOwner to User:bob on prefix billing.
 ```
 
 ## list
@@ -127,14 +194,19 @@ $ echo $?
 Lists the role bindings, one on a line, as bindings: the ordinary ACLs are
 not in it. It changes nothing.
 
-```console
-$ rbac list
-ROLE            MEMBER      ON
-DeveloperRead   User:alice  subjects with prefix orders-
-DeveloperRead   User:alice  prefix billing.
-DeveloperRead   User:carol  prefix billing.
-ClusterAdmin    User:carol  the cluster
-DeveloperWrite  User:bob    transactional ID billing-1
+<!-- run -->
+```bash
+rbac list
+```
+
+<!-- output -->
+```text
+ROLE             MEMBER      ON
+DeveloperManage  User:alice  connectors with prefix billing-
+DeveloperRead    User:alice  subjects with prefix orders-
+DeveloperRead    User:alice  prefix billing.
+ClusterAdmin     User:bob    the cluster
+DeveloperWrite   User:bob    transactional ID billing-1
 ```
 
 | Option | Meaning |
@@ -147,21 +219,13 @@ DeveloperWrite  User:bob    transactional ID billing-1
 
 `--prefix` and `--name` select the bindings that were bound with that very
 pattern; which bindings reach a given topic is what `who-can` answers.
+Without a binding to show it prints `No bindings.`
 
 A record whose principal type is a role and which is not a binding grants
-nothing ([roles.md](roles.md), "A record that is not a binding"). The
-authorizer refuses to create one; where one is in the metadata all the
-same, written before the authorizer was installed, it is not listed, and a
-warning on standard error names it:
-
-```console
-$ rbac list --role DeveloperRead
-warning: not a binding, grants nothing: DeveloperRead:User:dave on topics with prefix billing.: the operation is READ, a binding has ALL
-ROLE           MEMBER      ON
-DeveloperRead  User:alice  subjects with prefix orders-
-DeveloperRead  User:alice  prefix billing.
-DeveloperRead  User:carol  prefix billing.
-```
+nothing. The authorizer refuses to create one; where one is in the metadata
+all the same, written before the authorizer was installed, it is not listed,
+and a warning on standard error names it:
+[Bindings](bindings.md#a-record-that-is-not-a-binding) has the example.
 
 ### JSON
 
@@ -169,9 +233,15 @@ DeveloperRead  User:carol  prefix billing.
 when there is none. The shape is stable: fields may be added, these five
 stay.
 
-```console
-$ rbac list --member User:alice --output json
+<!-- run -->
+```bash
+rbac list --member User:alice --output json
+```
+
+<!-- output -->
+```text
 [
+  {"role":"DeveloperManage","member":"User:alice","resourceType":"TOPIC","name":"Connector:billing-","patternType":"PREFIXED"},
   {"role":"DeveloperRead","member":"User:alice","resourceType":"TOPIC","name":"Subject:orders-","patternType":"PREFIXED"},
   {"role":"DeveloperRead","member":"User:alice","resourceType":"TOPIC","name":"billing.","patternType":"PREFIXED"}
 ]
@@ -189,23 +259,23 @@ The five fields are the record as it is in the cluster's metadata, so what
 `list` prints is what any tool that manages ACLs sees. The order is fixed:
 by resource type, name, pattern type, role and member.
 
-## group add, group remove
+## group add
 
-`group add` puts a member in a group, and `group remove` takes it out and
-does nothing else: the bindings and the ACLs of the group stay. What a group
-is and what it gives its members is in [groups.md](groups.md).
+Puts a member in a group. What a group is and what it gives its members is
+in [Groups](groups.md).
 
-```console
-$ rbac group add --group payments --member User:alice
+<!-- run -->
+```bash
+rbac group add --group payments --member User:alice
+rbac group add --group payments --member User:bob
+rbac bind --role DeveloperRead --member Group:payments --prefix billing.
+```
+
+<!-- output -->
+```text
 Added User:alice to Group:payments
-$ rbac bind --role DeveloperRead --member Group:payments --prefix billing.
+Added User:bob to Group:payments
 Bound DeveloperRead to Group:payments on prefix billing.
-$ rbac group remove --group payments --member User:alice
-Removed User:alice from Group:payments
-$ rbac group remove --group payments --member User:alice
-error: no such membership: User:alice in Group:payments
-$ echo $?
-1
 ```
 
 | Option | Meaning |
@@ -218,23 +288,24 @@ member. Adding who is in the group already changes nothing. A group is not a
 member of a group, and `--member Group:billing` is wrong usage.
 
 What `group add` writes is the membership record, the one the ACL tool
-would write with `--allow-principal 'Member:User:alice' --operation All
---topic 'Group:payments'`.
+would write with `--allow-principal Member:User:alice --operation All
+--topic Group:payments`.
 
 ## group list
 
 Lists the members of the groups, one membership on a line. It changes
 nothing.
 
-```console
-$ rbac group list
+<!-- run -->
+```bash
+rbac group list
+```
+
+<!-- output -->
+```text
 GROUP     MEMBER
-audit     User:dave
 payments  User:alice
-payments  User:carol
-$ rbac group list --group audit
-GROUP  MEMBER
-audit  User:dave
+payments  User:bob
 ```
 
 | Option | Meaning |
@@ -242,22 +313,37 @@ audit  User:dave
 | `--group <name>` | only the members of that group |
 | `--output text\|json` | `text` by default |
 
-Without a membership it prints `No groups.`, and for a group nobody is in,
-`Group:payments has no members.` A record whose principal type is `Member`
-and which is not a membership puts nobody in a group
-([groups.md](groups.md), "A record that is not a membership"); it is not
-listed, and a warning on standard error names it.
+Without a membership it prints `No groups.`, and for a group nobody is in:
+
+<!-- run -->
+```bash
+rbac group list --group billing
+```
+
+<!-- output -->
+```text
+Group:billing has no members.
+```
+
+A record whose principal type is `Member` and which is not a membership
+puts nobody in a group
+([Groups](groups.md#a-record-that-is-not-a-membership)); it is not listed,
+and a warning on standard error names it.
 
 `--output json` prints one array with one object for each membership, and
 `[]` when there is none. The shape is stable: fields may be added, these two
 stay. The order is fixed: by group, then by member.
 
-```console
-$ rbac group list --output json
+<!-- run -->
+```bash
+rbac group list --output json
+```
+
+<!-- output -->
+```text
 [
-  {"group":"audit","member":"User:dave"},
   {"group":"payments","member":"User:alice"},
-  {"group":"payments","member":"User:carol"}
+  {"group":"payments","member":"User:bob"}
 ]
 ```
 
@@ -266,23 +352,65 @@ $ rbac group list --output json
 | `group` | the name of the group, as `--group` takes it: `payments` |
 | `member` | who is in it: `User:alice` |
 
+## group remove
+
+Takes the options of `group add`, takes the member out of the group and
+does nothing else: the bindings and the ACLs of the group stay.
+
+<!-- run -->
+```bash
+rbac group remove --group payments --member User:bob
+```
+
+<!-- output -->
+```text
+Removed User:bob from Group:payments
+```
+
+It fails, with the status 1, when the member is not in the group:
+
+<!-- run: exit 1 -->
+```bash
+rbac group remove --group payments --member User:bob
+```
+
+<!-- output -->
+```text
+error: no such membership: User:bob in Group:payments
+```
+
 ## who-can
 
 Names every principal a role or an ACL lets do an operation on a resource,
 with the binding or the ACL that lets it, and every principal a deny ACL
 stops, with that ACL. It changes nothing.
 
-```console
-$ rbac who-can --operation Read --topic billing.orders
+The examples need two ordinary ACLs, written with the ACL tool: one allows
+`User:bob` to read the topic `billing.orders`, and one denies him the topic
+`billing.payments`.
+
+<!-- run -->
+```bash
+kafka-acls.sh --bootstrap-server localhost:9092 --command-config admin.properties \
+  --add --allow-principal User:bob --operation Read --topic billing.orders
+kafka-acls.sh --bootstrap-server localhost:9092 --command-config admin.properties \
+  --add --deny-principal User:bob --operation Read --topic billing.payments
+```
+
+<!-- run -->
+```bash
+rbac who-can --operation Read --topic billing.orders
+```
+
+<!-- output -->
+```text
 Read on topic billing.orders:
 
 User:alice  allowed
+    allowed by binding DeveloperRead to Group:payments on prefix billing., as a member of Group:payments
     allowed by binding DeveloperRead to User:alice on prefix billing.
 User:bob  allowed
     allowed by ACL allow User:bob Read on topic billing.orders
-User:carol  denied
-    denied by ACL deny User:carol Read on topic billing.orders
-    without that, allowed by binding DeveloperRead to User:carol on prefix billing.
 
 Not counted: what the brokers' own settings allow (super.users, allow.everyone.if.no.acl.found).
 ```
@@ -300,45 +428,31 @@ Exactly one of `--topic`, `--group`, `--transactional-id` and `--cluster` is
 given. A principal that nothing lets do the operation is not named; when
 nobody is, the answer is `Nobody, by the roles and the ACLs.`
 
-`User:*` is everyone, as in an ACL. A principal that has only what everyone
-has is not named again:
-
-```console
-$ rbac who-can --operation Read --topic public.news
-Read on topic public.news:
-
-User:*  allowed
-    allowed by ACL allow User:* Read on topics with prefix public.
-User:bob  allowed
-    allowed by binding DeveloperRead to User:bob on prefix public.
-    allowed by ACL allow User:* Read on topics with prefix public.
-User:carol  denied
-    denied by ACL deny User:carol Read on topic public.news
-    without that, allowed by ACL allow User:* Read on topics with prefix public.
-
-Not counted: what the brokers' own settings allow (super.users, allow.everyone.if.no.acl.found).
-```
-
-### Groups
-
 A member of a group is named for what the group is given: a role bound to
 the group, or an `ALLOW` ACL whose principal is the group. The line says
 which group. The group itself is not named, since no client is a group, and
 a group nobody is in gives nobody anything.
 
-```console
-$ rbac who-can --operation Read --topic billing.orders
-Read on topic billing.orders:
+A principal that a deny ACL stops is named with that ACL and, after
+`without that`, with what would have let it:
+
+<!-- run -->
+```bash
+rbac group add --group payments --member User:bob
+rbac who-can --operation Read --topic billing.payments
+```
+
+<!-- output -->
+```text
+Added User:bob to Group:payments
+Read on topic billing.payments:
 
 User:alice  allowed
     allowed by binding DeveloperRead to Group:payments on prefix billing., as a member of Group:payments
-User:bob  allowed
-    allowed by binding DeveloperRead to User:bob on prefix billing.
-User:carol  denied
-    denied by ACL deny User:carol Read on topic billing.orders
+    allowed by binding DeveloperRead to User:alice on prefix billing.
+User:bob  denied
+    denied by ACL deny User:bob Read on topic billing.payments
     without that, allowed by binding DeveloperRead to Group:payments on prefix billing., as a member of Group:payments
-User:dave  allowed
-    allowed by ACL allow Group:audit Read on topic billing.orders, as a member of Group:audit
 
 Not counted: what the brokers' own settings allow (super.users, allow.everyone.if.no.acl.found).
 ```
@@ -355,11 +469,26 @@ fed the membership records of the cluster.
 
 The question is the operation on the resource, as an ordinary request asks
 it. A few requests are decided by rules of their own, and `who-can` does not
-answer for them: who may create and delete bindings and ACLs, who may list
-them, and who may replace a user's SCRAM credentials are in
-[roles.md](roles.md) and the README. So `who-can --operation Alter --cluster`
-names a `ClusterAdmin`, who may not bind a role, and not a `ResourceOwner`,
-who may, inside what it owns.
+answer for them: who may create and delete bindings and ACLs, and who may
+list them, are in [Delegation](delegation.md), and who may replace a user's
+SCRAM credentials in [Roles](roles.md). So this names `User:bob`, a
+`ClusterAdmin`, who may not bind a role, and would not name a
+`ResourceOwner`, who may, inside what it owns:
+
+<!-- run -->
+```bash
+rbac who-can --operation Alter --cluster
+```
+
+<!-- output -->
+```text
+Alter on the cluster:
+
+User:bob  allowed
+    allowed by binding ClusterAdmin to User:bob on the cluster
+
+Not counted: what the brokers' own settings allow (super.users, allow.everyone.if.no.acl.found).
+```
 
 What it cannot see is the configuration of the brokers:
 
@@ -373,20 +502,30 @@ What it cannot see is the configuration of the brokers:
 ## what-can
 
 Lists what a principal may do, with the binding or the ACL behind each
-line, and what a deny ACL takes away. It changes nothing.
+line, and what a deny ACL takes away. It changes nothing. `User:bob` holds
+`ClusterAdmin` and a binding on a transactional ID, is in `Group:payments`,
+and has the two ACLs of the examples above:
 
-```console
-$ rbac what-can --principal User:carol
-User:carol may:
-  topics with prefix billing.             Read, Describe                                                                                     by binding DeveloperRead to User:carol on prefix billing.
-  groups with prefix billing.             Read, Describe                                                                                     by binding DeveloperRead to User:carol on prefix billing.
-  transactional IDs with prefix billing.  Describe                                                                                           by binding DeveloperRead to User:carol on prefix billing.
-  every topic                             Create, Delete, Alter, Describe, DescribeConfigs, AlterConfigs                                     by binding ClusterAdmin to User:carol on the cluster
-  the cluster                             Create, Alter, Describe, DescribeConfigs, AlterConfigs                                             by binding ClusterAdmin to User:carol on the cluster
-  every subject                           all                                                                                                by binding ClusterAdmin to User:carol on the cluster
-  every connector                         Create, Delete, ReadConfig, ReadStatus, ReadActiveTopics, Pause, Resume, Scale, ResetActiveTopics  by binding ClusterAdmin to User:carol on the cluster
+<!-- run -->
+```bash
+rbac what-can --principal User:bob
+```
+
+<!-- output -->
+```text
+User:bob is in Group:payments.
+User:bob may:
+  topics with prefix billing.             Read, Describe                                                                                     by binding DeveloperRead to Group:payments on prefix billing., as a member of Group:payments
+  groups with prefix billing.             Read, Describe                                                                                     by binding DeveloperRead to Group:payments on prefix billing., as a member of Group:payments
+  transactional IDs with prefix billing.  Describe                                                                                           by binding DeveloperRead to Group:payments on prefix billing., as a member of Group:payments
+  every topic                             Create, Delete, Alter, Describe, DescribeConfigs, AlterConfigs                                     by binding ClusterAdmin to User:bob on the cluster
+  the cluster                             Create, Alter, Describe, DescribeConfigs, AlterConfigs                                             by binding ClusterAdmin to User:bob on the cluster
+  every subject                           all                                                                                                by binding ClusterAdmin to User:bob on the cluster
+  every connector                         Create, Delete, ReadConfig, ReadStatus, ReadActiveTopics, Pause, Resume, Scale, ResetActiveTopics  by binding ClusterAdmin to User:bob on the cluster
+  transactional ID billing-1              Write, Describe                                                                                    by binding DeveloperWrite to User:bob on transactional ID billing-1
+  topic billing.orders                    Read, Describe                                                                                     by ACL allow User:bob Read on topic billing.orders
 but not, whatever allows it:
-  topic billing.orders  Read  by ACL deny User:carol Read on topic billing.orders
+  topic billing.payments  Read  by ACL deny User:bob Read on topic billing.payments
 
 Not counted: what the brokers' own settings allow (super.users, allow.everyone.if.no.acl.found).
 ```
@@ -399,7 +538,9 @@ Not counted: what the brokers' own settings allow (super.users, allow.everyone.i
 There is one line for each record and kind of resource: what the record
 gives on the names its pattern covers. `all` is every operation of the
 kind. An operation that Kafka allows along with another is listed with it:
-an ACL that allows `Write` shows `Write, Describe`.
+an ACL that allows `Read` shows `Read, Describe`. What the principal gets
+as a member of a group is listed with the group, and the first line names
+the groups it is in.
 
 A deny ACL beats every role and every allow, so what is under `but not` is
 denied on the names of that line whatever the lines above give there.
@@ -409,53 +550,88 @@ what the principal may bind, and whether it may list the ACLs, is not in
 it.
 
 The lines for subjects and connectors say what the role of the binding
-grants there ([roles.md](roles.md)). A broker never decides those requests:
+grants there ([Roles](roles.md)). A broker never decides those requests:
 the extension for Kafka Connect answers for connectors
-([connect.md](connect.md)), and nothing in this jar answers for subjects.
-
-### Groups
-
-What the principal gets as a member of a group is listed with the group, and
-the first line names the groups it is in:
-
-```console
-$ rbac what-can --principal User:alice
-User:alice is in Group:audit, Group:payments.
-User:alice may:
-  topics with prefix billing.             Read, Describe   by binding DeveloperRead to Group:payments on prefix billing., as a member of Group:payments
-  groups with prefix billing.             Read, Describe   by binding DeveloperRead to Group:payments on prefix billing., as a member of Group:payments
-  transactional IDs with prefix billing.  Describe         by binding DeveloperRead to Group:payments on prefix billing., as a member of Group:payments
-  topic orders                            Write, Describe  by ACL allow User:alice Write on topic orders
-  topic reports                           Read, Describe   by ACL allow Group:audit Read on topic reports, as a member of Group:audit
-but not, whatever allows it:
-  topic billing.secret  Read  by ACL deny User:alice Read on topic billing.secret
-
-Not counted: what the brokers' own settings allow (super.users, allow.everyone.if.no.acl.found).
-```
+([Kafka Connect](connect.md)), and nothing in this jar answers for
+subjects.
 
 Asked about a group, it lists the members and what the group gives them:
 
-```console
-$ rbac what-can --principal Group:audit
-Group:audit has the members User:alice, User:dave.
-A member of Group:audit may:
-  topic reports  Read, Describe  by ACL allow Group:audit Read on topic reports
+<!-- run -->
+```bash
+rbac what-can --principal Group:payments
+```
+
+<!-- output -->
+```text
+Group:payments has the members User:alice, User:bob.
+A member of Group:payments may:
+  topics with prefix billing.             Read, Describe  by binding DeveloperRead to Group:payments on prefix billing.
+  groups with prefix billing.             Read, Describe  by binding DeveloperRead to Group:payments on prefix billing.
+  transactional IDs with prefix billing.  Describe        by binding DeveloperRead to Group:payments on prefix billing.
 
 Not counted: what the brokers' own settings allow (super.users, allow.everyone.if.no.acl.found).
 ```
 
 A `DENY` ACL whose principal is a group cannot be created
-([groups.md](groups.md), "Denying"). Where one is in the metadata all the
-same, a warning on standard error names it, `who-can` names it as the reason
-for the members it stops, and `what-can` lists it apart, under `and not by a
-role or a group, only by an ACL that names User:alice`: it takes away what
-roles and groups give, and nothing an ACL allows the principal by name.
+([Groups](groups.md#denying)). Where one is in the metadata all the same, a
+warning on standard error names it, `who-can` names it as the reason for the
+members it stops, and `what-can` lists it apart, under `and not by a role or
+a group, only by an ACL that names` the principal: it takes away what roles
+and groups give, and nothing an ACL allows the principal by name. This
+paragraph is checked by the unit tests of the command, not on a broker.
 
-A principal no record names may do nothing:
+A principal no record names may do nothing. That is so for a super user as
+well, whom the brokers allow everything by their own setting:
 
-```console
-$ rbac what-can --principal User:erin
-User:erin may do nothing, by the roles and the ACLs.
+<!-- run -->
+```bash
+rbac what-can --principal User:admin
+```
+
+<!-- output -->
+```text
+User:admin may do nothing, by the roles and the ACLs.
+
+Not counted: what the brokers' own settings allow (super.users, allow.everyone.if.no.acl.found).
+```
+
+### Everyone
+
+`User:*` is everyone, as in an ACL. `who-can` names it, and does not name
+again a principal that has only what everyone has; `what-can` lists what
+everyone may do with what the principal may:
+
+<!-- run -->
+```bash
+kafka-acls.sh --bootstrap-server localhost:9092 --command-config admin.properties \
+  --add --allow-principal 'User:*' --operation Read --topic orders
+```
+
+<!-- run -->
+```bash
+rbac who-can --operation Read --topic orders
+```
+
+<!-- output -->
+```text
+Read on topic orders:
+
+User:*  allowed
+    allowed by ACL allow User:* Read on topic orders
+
+Not counted: what the brokers' own settings allow (super.users, allow.everyone.if.no.acl.found).
+```
+
+<!-- run -->
+```bash
+rbac what-can --principal User:admin
+```
+
+<!-- output -->
+```text
+User:admin may:
+  topic orders  Read, Describe  by ACL allow User:* Read on topic orders
 
 Not counted: what the brokers' own settings allow (super.users, allow.everyone.if.no.acl.found).
 ```
@@ -467,22 +643,49 @@ the cluster, prints the difference and makes the cluster match. It creates
 what is in the file and not in the cluster, and deletes the bindings and the
 memberships that are in the cluster and not in the file.
 
-```console
-$ rbac apply --file access.json --dry-run
-+ membership of User:alice in Group:payments
-+ binding DeveloperRead to Group:payments on prefix billing.
+<!-- run -->
+```bash
+rbac apply --file docs/examples/apply.json --dry-run
+```
+
+<!-- output -->
+```text
++ binding DeveloperWrite to User:bob on name orders
 + binding ClusterAdmin to User:carol on the cluster
-- membership of User:dave in Group:audit
-- binding DeveloperWrite to User:bob on name orders
-Would create 3 and delete 2. Nothing was changed.
-$ rbac apply --file access.json
-+ membership of User:alice in Group:payments
-+ binding DeveloperRead to Group:payments on prefix billing.
+- binding DeveloperManage to User:alice on connectors with prefix billing-
+- membership of User:bob in Group:payments
+- binding DeveloperRead to User:alice on subjects with prefix orders-
+- binding DeveloperRead to User:alice on prefix billing.
+- binding ClusterAdmin to User:bob on the cluster
+- binding DeveloperWrite to User:bob on transactional ID billing-1
+Would create 2 and delete 6. Nothing was changed.
+```
+
+<!-- run -->
+```bash
+rbac apply --file docs/examples/apply.json
+```
+
+<!-- output -->
+```text
++ binding DeveloperWrite to User:bob on name orders
 + binding ClusterAdmin to User:carol on the cluster
-- membership of User:dave in Group:audit
-- binding DeveloperWrite to User:bob on name orders
-Created 3, deleted 2.
-$ rbac apply --file access.json
+- binding DeveloperManage to User:alice on connectors with prefix billing-
+- membership of User:bob in Group:payments
+- binding DeveloperRead to User:alice on subjects with prefix orders-
+- binding DeveloperRead to User:alice on prefix billing.
+- binding ClusterAdmin to User:bob on the cluster
+- binding DeveloperWrite to User:bob on transactional ID billing-1
+Created 2, deleted 6.
+```
+
+<!-- run -->
+```bash
+rbac apply --file docs/examples/apply.json
+```
+
+<!-- output -->
+```text
 Nothing to change: the cluster has what the file has.
 ```
 
@@ -502,6 +705,9 @@ fields, each optional:
 | `bindings` | the array that `list --output json` prints: one object for each binding, with `role`, `member`, `resourceType`, `name` and `patternType` ([JSON](#json)) |
 | `groups` | the array that `group list --output json` prints: one object for each membership, with `group` and `member` ([group list](#group-list)) |
 
+[examples/apply.json](examples/apply.json), the file of the example above,
+is:
+
 ```json
 {
   "bindings": [
@@ -515,9 +721,10 @@ fields, each optional:
 }
 ```
 
-That is [examples/apply.json](examples/apply.json). A file of a cluster as
-it is now is the two listings put together:
+A file of a cluster as it is now is the two listings put together, and
+applying it changes nothing:
 
+<!-- run -->
 ```bash
 {
   echo '{"bindings":'
@@ -526,6 +733,12 @@ it is now is the two listings put together:
   rbac group list --output json
   echo '}'
 } > access.json
+rbac apply --file access.json
+```
+
+<!-- output -->
+```text
+Nothing to change: the cluster has what the file has.
 ```
 
 The array of `list --output json` alone is a file too: it is the bindings,
@@ -543,14 +756,19 @@ as if it were the object with `bindings` only.
   `list --output json`, which may have gained fields, still applies. Another
   field of the file itself, next to `bindings` and `groups`, is refused.
 - **`--no-delete` only adds.** What is in the cluster and not in the file is
-  printed as `not in the file, and left`, and stays.
+  printed as `not in the file, and left`, and stays:
 
-```console
-$ rbac apply --file access.json --no-delete
-+ binding DeveloperRead to Group:payments on prefix billing.
-  not in the file, and left: membership of User:dave in Group:audit
-  not in the file, and left: binding DeveloperWrite to User:bob on name orders
-Created 1, deleted 0; 2 not in the file left as they are, as --no-delete says.
+<!-- run -->
+```bash
+rbac bind --role DeveloperRead --member User:bob --name orders
+rbac apply --file docs/examples/apply.json --no-delete
+```
+
+<!-- output -->
+```text
+Bound DeveloperRead to User:bob on name orders
+  not in the file, and left: binding DeveloperRead to User:bob on name orders
+Nothing to change; 1 not in the file left as it is, as --no-delete says.
 ```
 
 ### What it does to the cluster
@@ -568,11 +786,22 @@ A file that is not valid JSON, lacks a field or has a binding that the
 record format does not allow is refused before the cluster is asked
 anything, with the place and the field, and the status is 2:
 
-```console
-$ rbac apply --file access.json
-error: access.json: line 4, column 5: bindings[1]: "name" is required
-$ echo $?
-2
+<!-- run: exit 2 -->
+```bash
+cat > broken.json <<'JSON'
+{
+  "bindings": [
+    {"role":"DeveloperRead","member":"User:alice","resourceType":"TOPIC","name":"billing.","patternType":"PREFIXED"},
+    {"role":"DeveloperWrite","member":"User:bob","resourceType":"TOPIC","patternType":"LITERAL"}
+  ]
+}
+JSON
+rbac apply --file broken.json
+```
+
+<!-- output -->
+```text
+error: broken.json: line 4, column 5: bindings[1]: "name" is required
 ```
 
 ## import
@@ -580,10 +809,15 @@ $ echo $?
 Writes the bindings of a file that has another shape than the command's
 own: a list of bindings of named roles, or a list of roles that are sets of
 ACLs. The two shapes, field by field, what each becomes and what is skipped
-are in [import.md](import.md).
+are in [Bringing bindings over](import.md).
 
-```console
-$ rbac import --file docs/examples/role-acls.json --format role-acls --dry-run
+<!-- run -->
+```bash
+rbac import --file docs/examples/role-acls.json --format role-acls --dry-run
+```
+
+<!-- output -->
+```text
 + membership of User:alice in Group:orders-readers
 + membership of User:bob in Group:orders-readers
 + ACL allow Group:orders-readers Read on topic orders
@@ -607,28 +841,50 @@ guessed. `import` only adds.
 What is wrong is printed first, then the usage of the verb, on standard
 error, and the status is 2. Nothing is sent to the cluster.
 
-```console
-$ rbac bind --role DeveloperRead --member User:alice
-DeveloperRead is bound to a name pattern: give --prefix or --name
+<!-- run: exit 2 -->
+```bash
+rbac bind --role DeveloperRead --member User:alice
+```
 
+<!-- output: excerpt -->
+```text
+DeveloperRead is bound to a name pattern: give --prefix or --name
 Usage: kafka-run-class.sh dev.kfkit.kfkrbac.RbacCommand bind --bootstrap-server <host:port> [--command-config <file>]
-           --role <role> --member <type:name> [--prefix <prefix> | --name <name>]
-           [--group-only | --transactional-id-only | --subject | --connector]
-...
-$ echo $?
-2
 ```
 
 ## Who may run it
 
-The cluster decides, as it does for the ACL tool. `list`, `who-can`,
-`what-can` and `group list` list the ACLs: whoever may describe the cluster,
-and a `ResourceOwner`. `apply` lists them too, and then creates and deletes
-bindings and memberships as `bind`, `unbind`, `group add` and `group remove`
-do, by the same rules; `import` creates bindings, or memberships and
-ordinary ACLs, and lists nothing. `bind` and `unbind` create and delete one ACL record:
-a principal the ACLs allow to alter the cluster and a `SystemAdmin` any
-binding, a `ResourceOwner` bindings inside what it owns, everyone else
-none. `group add` and `group remove` create and delete one membership
-record: a principal the ACLs allow to alter the cluster and a `SystemAdmin`,
-and nobody else. A refusal comes back with its reason.
+The cluster decides, as it does for the ACL tool.
+
+| Verb | What it asks of the cluster | Who may |
+|---|---|---|
+| `list`, `group list`, `who-can`, `what-can` | to list the ACLs | whoever may describe the cluster, and a `ResourceOwner` of any pattern |
+| `bind`, `unbind` | to create or delete one ACL record | a principal the ACLs allow to alter the cluster and a `SystemAdmin`: any binding; a `ResourceOwner`: bindings inside what it owns |
+| `group add`, `group remove` | to create or delete one membership record | a principal the ACLs allow to alter the cluster, and a `SystemAdmin` |
+| `apply` | to list the ACLs, and then what `bind`, `unbind`, `group add` and `group remove` ask | by the same rules |
+| `import` | to create bindings, or memberships and ordinary ACLs; it lists nothing | as for `bind` and, for `role-acls`, as for `group add` |
+
+The rules are in [Delegation](delegation.md). A refusal comes back in one
+of two ways:
+
+- A principal that holds `ResourceOwner`, or that something lets alter the
+  cluster, reaches the rules for bindings, and a refusal there is the
+  authorizer's, with what was asked, why not and what the caller does own,
+  as [above](#bind).
+- A principal with neither is stopped before that, by the check the broker
+  makes of every request that creates or deletes ACLs, and the message is
+  the broker's own. `User:alice` holds two roles here and neither lets her
+  bind:
+
+<!-- run: exit 1 -->
+```bash
+rbac_as alice bind --role DeveloperRead --member User:alice --name orders
+```
+
+<!-- output: excerpt -->
+```text
+needs ALTER permission.
+```
+
+  The broker's log has a line for that check
+  ([Troubleshooting](troubleshooting.md#creating-a-binding-needs-alter-permission)).

@@ -3,6 +3,9 @@
 How to check that a kfkrbac jar is the one this repository built, and what
 is kept here as evidence of when each release existed.
 
+There is no release yet, so the commands of this page have not been run on
+one.
+
 ## A released jar
 
 Every release `vX.Y.Z` is built by the [release workflow](../../.github/workflows/release.yml)
@@ -20,6 +23,7 @@ GitHub.
 Download the three files into one directory and check them, from the
 weakest proof to the strongest:
 
+<!-- not run: it needs a release, and there is none yet -->
 ```bash
 X=X.Y.Z
 
@@ -44,6 +48,7 @@ instead of the regular expression.
 
 The jar's manifest names its version:
 
+<!-- not run: it needs a release, and there is none yet -->
 ```bash
 unzip -p "kfkrbac-$X.jar" META-INF/MANIFEST.MF | grep Implementation-Version
 ```
@@ -60,6 +65,7 @@ neither on GitHub nor on the signatures above.
 
 Check that a line still matches its tag:
 
+<!-- not run: it needs a release, and there is none yet -->
 ```bash
 git rev-parse vX.Y.Z vX.Y.Z^{commit}
 git archive --format=tar vX.Y.Z | shasum -a 256
@@ -67,6 +73,7 @@ git archive --format=tar vX.Y.Z | shasum -a 256
 
 and, once the proof exists, read it:
 
+<!-- not run: it needs a release, and there is none yet -->
 ```bash
 uvx --from opentimestamps-client ots info docs/provenance/release-hashes.txt.ots
 ```

@@ -61,6 +61,12 @@ import org.junit.jupiter.api.Timeout;
  * and the brackets around an ACL record in a line of the broker's log,
  * which Kafka 4.1 prints round and the newest release, as the pages do,
  * square.
+ *
+ * <p>To write or update a page, run this with the environment variable
+ * {@code KFKRBAC_DOCS_RECORD} set: a block that exits as the page says and
+ * prints something else does not stop the page, the rest is run, and what
+ * every block printed is under {@code build/integration-logs/docs-output};
+ * the test still fails, with the list of what differs.
  */
 @Timeout(value = 15, unit = TimeUnit.MINUTES)
 class DocsIT {
@@ -77,8 +83,15 @@ class DocsIT {
     /** By name: the node loads the class from the jar, not from this test's classpath. */
     private static final String RBAC_AUTHORIZER = "dev.kfkit.kfkrbac.RbacAuthorizer";
     private static final String SUPER_USERS = "super.users=User:admin;User:ANONYMOUS";
+    private static final String RBAC = "authorizer.class.name=" + RBAC_AUTHORIZER;
+
+    /** Whether a page is being written: see the class comment. */
+    private static final boolean RECORD = System.getenv("KFKRBAC_DOCS_RECORD") != null;
+    /** In that mode, how long a block is run again for when it exits with another status than the page says. */
+    private static final Duration RECORD_IN_FORCE = Duration.ofSeconds(10);
 
     private final Map<String, DocBroker> nodes = new LinkedHashMap<>();
+    private final List<String> notAsThePage = new ArrayList<>();
     private String page;
 
     @BeforeEach
@@ -148,6 +161,114 @@ class DocsIT {
         follow("delegation");
     }
 
+    /**
+     * {@code docs/roles.md}: its two bindings, on a node the image starts
+     * with the environment {@code docs/install.md} gives for it.
+     */
+    @Test
+    void theRolesPage() {
+        node("main", DocBroker.ofTheImage(environment()));
+
+        follow("roles");
+    }
+
+    /** {@code docs/groups.md}, on such a node with the two topics the page says its cluster has. */
+    @Test
+    void theGroupsGuide() {
+        DocBroker main = node("main", DocBroker.ofTheImage(environment()));
+        main.prepare("""
+                kafka-topics.sh %1$s --create --topic orders
+                kafka-topics.sh %1$s --create --topic billing.orders
+                """.formatted(BOOTSTRAP));
+
+        follow("groups");
+    }
+
+    /** {@code docs/command.md}, every verb, on such a node, which has no ACL and no binding. */
+    @Test
+    void theCommandReference() {
+        node("main", DocBroker.ofTheImage(environment()));
+
+        follow("command");
+    }
+
+    /** {@code docs/import.md}: the two example files of {@code docs/examples/}, on such a node. */
+    @Test
+    void theImportGuide() {
+        node("main", DocBroker.ofTheImage(environment()));
+
+        follow("import");
+    }
+
+    /**
+     * {@code docs/metrics.md}: a node from the distribution that runs the
+     * authorizer gets the setting and is restarted, and Kafka's JMX tool
+     * reads what kfkwho's recorder registered.
+     */
+    @Test
+    void theMetricsGuide() {
+        DocBroker main = node("main", DocBroker.fromTheDistributionWithTheJar(RBAC, SUPER_USERS));
+        main.prepare("""
+                kafka-topics.sh %1$s --create --topic billing.orders
+                """.formatted(BOOTSTRAP));
+
+        follow("metrics");
+    }
+
+    /**
+     * {@code docs/troubleshooting.md}: a node from the distribution, whose
+     * log is a file the page reads the lines for denied requests from, with
+     * the topic, the record and the binding the page says its cluster has.
+     */
+    @Test
+    void theTroubleshootingGuide() {
+        DocBroker main = node("main", DocBroker.fromTheDistributionWithTheJar(RBAC, SUPER_USERS));
+        main.prepare(asOn(DocBroker.release(), """
+                kafka-topics.sh %1$s --create --topic billing.orders
+                echo 'first order' | kafka-console-producer.sh %1$s --topic billing.orders
+                kafka-run-class.sh dev.kfkit.kfkrbac.RbacCommand bind %1$s \
+                --role DeveloperRead --member User:alice --prefix billing.
+                """.formatted(BOOTSTRAP)));
+
+        follow("troubleshooting");
+    }
+
+    /**
+     * {@code docs/connect.md}: next to a node the image starts there is what
+     * the page says its worker has, and the page itself installs the
+     * extension and starts the worker, in the node's container, where
+     * {@code localhost:8083} is the worker. The image has no {@code curl},
+     * which the page sends its requests with, so it is installed first.
+     */
+    @Test
+    void theConnectGuide() {
+        DocBroker main = node("main", DocBroker.ofTheImage(environment()));
+        main.asRoot("apk add --no-cache curl");
+        main.prepare("""
+                kafka-topics.sh %1$s --create --topic billing.orders
+                mkdir -p /tmp/kfkrbac-docs/plugins
+                cp "$KAFKA_HOME"/libs/connect-file-*.jar /tmp/kfkrbac-docs/plugins/
+                """.formatted(BOOTSTRAP));
+
+        try {
+            follow("connect");
+        } finally {
+            keepTheWorkersLog(main);
+        }
+    }
+
+    /** What the worker of {@code docs/connect.md} logged, next to the node's log: it explains a failure. */
+    private static void keepTheWorkersLog(DocBroker node) {
+        try {
+            Path dir = Path.of(System.getProperty("kfkrbac.it.logs"));
+            Files.createDirectories(dir);
+            Files.writeString(dir.resolve("docs-connect-worker.log"),
+                    node.run("cat \"$KAFKA_HOME\"/logs/connect.log 2>&1 | tail -n 400").output());
+        } catch (IOException | RuntimeException e) {
+            System.err.println("could not keep the log of the worker: " + e);
+        }
+    }
+
     /** The variables {@code docs/install.md} gives for the image: they are what makes a node refuse anything. */
     private static Map<String, String> environment() {
         Map<String, String> environment = DocSteps.of(DOCS.resolve("install.md")).environment();
@@ -189,11 +310,14 @@ class DocsIT {
             ran++;
         }
         assertFalse(ran == 0, document + " has no block of commands to run");
+        assertEquals(List.of(), notAsThePage, "blocks that did not do what the page says; what they printed is in "
+                + "build/integration-logs/docs-output/" + page);
     }
 
     /** Runs a block until it does what the page says, and fails with what it did when it does not in time. */
     private void run(Path document, DocSteps.Run run, DocBroker node, String commands) {
-        long deadline = System.nanoTime() + IN_FORCE.toNanos();
+        Duration within = run.within() != null ? run.within() : RECORD ? RECORD_IN_FORCE : IN_FORCE;
+        long deadline = System.nanoTime() + within.toNanos();
         int attempts = 0;
         while (true) {
             DocBroker.Result result = node.run(commands);
@@ -203,9 +327,14 @@ class DocsIT {
             if (wrong == null) {
                 return;
             }
-            if (System.nanoTime() >= deadline) {
+            boolean late = System.nanoTime() >= deadline;
+            if (RECORD && (late || result.exit() == run.exit() && run.within() == null)) {
+                notAsThePage.add(document + ":" + run.line() + ": " + wrong.lines().findFirst().orElse(wrong));
+                return;
+            }
+            if (late) {
                 throw new AssertionError(document + ":" + run.line() + ": " + wrong + " (run " + attempts
-                        + " times in " + IN_FORCE.toSeconds() + " s)\n--- the block\n" + run.commands()
+                        + " times in " + within.toSeconds() + " s)\n--- the block\n" + run.commands()
                         + "--- exit status " + result.exit() + ", and it printed\n" + shown(result.output()));
             }
             pause();

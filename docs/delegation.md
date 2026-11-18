@@ -52,6 +52,15 @@ A request is decided as a whole. When one record of a request is refused,
 none is created; when a filter of a delete matches one record the caller
 may not delete, nothing is deleted. The caller gets the reason back.
 
+That reason is this authorizer's only for a caller that reaches these
+rules: one that holds `ResourceOwner`, or that something, an ACL, a role or
+a group, lets alter the cluster. A caller with neither is stopped before
+them, by the check the broker makes of every request that creates or
+deletes ACLs, and gets the broker's own message, which ends in `needs ALTER
+permission.` The first command of the example below is such a caller, and
+[Troubleshooting](troubleshooting.md#creating-a-binding-needs-alter-permission)
+has the line the broker logs for it.
+
 ## The cluster of the examples
 
 One node at `localhost:9092` that runs `RbacAuthorizer`

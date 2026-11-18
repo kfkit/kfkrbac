@@ -1,20 +1,14 @@
 # Bringing bindings over
 
 `import` reads a file of role bindings that has another shape than the
-command's own and writes what it holds to the cluster. It is a verb of the
-command ([command.md](command.md)):
-
-```bash
-kafka-run-class.sh dev.kfkit.kfkrbac.RbacCommand import --bootstrap-server localhost:9092 \
-  --file bindings.json --format role-bindings --dry-run
-```
-
-It reads files only, and two shapes of them:
+command's own and writes what it holds to a cluster of Apache Kafka® that
+runs `RbacAuthorizer`. It is a verb of [the command](command.md). It reads
+files only, and two shapes of them:
 
 | `--format` | The file is | It is written as |
 |---|---|---|
 | [`role-bindings`](#role-bindings) | a list of bindings of named roles | bindings |
-| [`role-acls`](#role-acls) | a list of roles that are sets of ACLs | for each role, a group with the role's members, and ordinary `ALLOW` ACLs whose principal is the group ([groups.md](groups.md)) |
+| [`role-acls`](#role-acls) | a list of roles that are sets of ACLs | for each role, a group with the role's members, and ordinary `ALLOW` ACLs whose principal is the group ([Groups](groups.md)) |
 
 | Option | Meaning |
 |---|---|
@@ -23,8 +17,27 @@ It reads files only, and two shapes of them:
 | `--cluster-id <id>` | for `role-bindings`: only the bindings for that Kafka cluster, and those that name none |
 | `--dry-run` | print what would be written and what is skipped, and change nothing |
 
-The examples below leave out `--bootstrap-server` and `--command-config`,
-and write `rbac` for `kafka-run-class.sh dev.kfkit.kfkrbac.RbacCommand`.
+> Status: every command of this page is run by a test of the integration
+> suite (`DocsIT`) on a broker of the newest supported release, and the
+> output shown is what the commands printed there.
+
+## The cluster of the examples
+
+One node at `localhost:9092` that runs `RbacAuthorizer`
+([Installation](install.md)), with no ACL and no binding, and a file of
+client properties, `admin.properties`, for `User:admin`, who is in
+`super.users`. Kafka's `bin` is on the `PATH`, and the commands are run in a
+copy of this repository, for the files of `docs/examples/`.
+
+The examples write `rbac` for the command with that connection:
+
+<!-- run: session -->
+```bash
+rbac() {
+  kafka-run-class.sh dev.kfkit.kfkrbac.RbacCommand "$@" \
+    --bootstrap-server localhost:9092 --command-config admin.properties
+}
+```
 
 ## Nothing is guessed
 
@@ -51,7 +64,7 @@ request, which the authorizer applies as a whole or not at all.
 Importing a file twice changes nothing: a record that exists is left as it
 is. `import` only adds; it never deletes a binding, a membership or an ACL.
 To make the cluster match a file, deletions included, use `apply` with a
-file in the command's own shape ([command.md](command.md), "apply").
+file in the command's own shape ([The command](command.md#apply)).
 
 ## role-bindings
 
@@ -75,9 +88,9 @@ How a binding of the file becomes bindings of the cluster:
 
 | In the file | Written as |
 |---|---|
-| a `role` that is one of the seven of [roles.md](roles.md) | that role; the name is taken as it is, in its exact spelling |
+| a `role` that is one of the seven [roles](roles.md) | that role; the name is taken as it is, in its exact spelling |
 | a `principal` `User:<name>` or `Group:<name>` | the member of the binding |
-| a pattern with `resourceType` `Topic` | a binding on that name or prefix. Such a binding is for the topics, the groups and the transactional IDs of that name ([roles.md](roles.md)): this is what a binding is, and it is the one case where what is written reaches further than the pattern of the file |
+| a pattern with `resourceType` `Topic` | a binding on that name or prefix. Such a binding is for the topics, the groups and the transactional IDs of that name ([Bindings](bindings.md)): this is what a binding is, and it is the one case where what is written reaches further than the pattern of the file |
 | a pattern `Group` or `TransactionalId` with the name and pattern type of a `Topic` pattern of the same principal and role | nothing more: the binding on that name covers it, and the report says `covered` |
 | any other pattern `Group` or `TransactionalId` | a binding narrowed to groups, or to transactional IDs |
 | a pattern `Subject` or `Connector` | a binding for subjects, or for connectors |
@@ -91,7 +104,7 @@ What is skipped and reported:
 | a `principal` that is neither `User:<name>` nor `Group:<name>` | |
 | a `resourceType` other than the six | nothing here authorizes it |
 | a `patternType` other than `LITERAL` and `PREFIXED` | |
-| a role that is bound to a name pattern, without a pattern; a role that is bound to the cluster, with a pattern for something else; a pattern `Cluster` for a role that is bound to a name pattern | the record format does not allow it ([roles.md](roles.md)) |
+| a role that is bound to a name pattern, without a pattern; a role that is bound to the cluster, with a pattern for something else; a pattern `Cluster` for a role that is bound to a name pattern | the record format does not allow it ([Bindings](bindings.md#a-record-that-is-not-a-binding)) |
 | a name that is empty, or that starts with `Group:`, `Subject:` or `Connector:` | those are reserved in a record |
 | a `scope` with a field other than `clusters`, or `scope.clusters` with an entry other than `kafka-cluster` | a binding here is for the Kafka cluster and for everything that reads its bindings; it cannot be narrowed further, and writing it anyway would give more than the file gives. Take that part of the scope out of the file to import the binding so |
 
@@ -113,10 +126,28 @@ is wrong usage: the command does not pick one.
 bindings: one for a topic prefix and the groups of the same prefix, one for
 a group of users, one with a resource type nothing here authorizes, one of a
 role bound to the cluster, one of a role that does not exist here, and one
-for another cluster.
+for another cluster. A dry run first:
 
-```console
-$ rbac import --file docs/examples/role-bindings.json --format role-bindings --cluster-id cluster-1
+<!-- run -->
+```bash
+rbac import --file docs/examples/role-bindings.json --format role-bindings \
+  --cluster-id cluster-1 --dry-run
+```
+
+<!-- output: excerpt -->
+```text
+Would write 6 bindings; 1 covered by another; skipped 2; left out 1 for another cluster. Nothing was changed.
+```
+
+Then the run that writes:
+
+<!-- run -->
+```bash
+rbac import --file docs/examples/role-bindings.json --format role-bindings --cluster-id cluster-1
+```
+
+<!-- output -->
+```text
 + binding DeveloperRead to User:alice on prefix billing.
 + binding DeveloperWrite to Group:payments on name orders
 + binding DeveloperWrite to Group:payments on transactional ID billing-1
@@ -136,8 +167,13 @@ pattern of the third binding, and the line it starts at.
 
 Afterwards:
 
-```console
-$ rbac list
+<!-- run -->
+```bash
+rbac list
+```
+
+<!-- output -->
+```text
 ROLE            MEMBER          ON
 ResourceOwner   User:bob        subjects with prefix billing.
 DeveloperRead   User:alice      prefix billing.
@@ -172,7 +208,7 @@ How a role of the file is written:
 
 | In the file | Written as |
 |---|---|
-| a role | a group of the role's `name`: `Group:orders-readers`. A group is not a record of its own; it is there once it has a member ([groups.md](groups.md)) |
+| a role | a group of the role's `name`: `Group:orders-readers`. A group is not a record of its own; it is there once it has a member ([Groups](groups.md)) |
 | a member | a membership of that group |
 | an `ALLOW` ACL | an ordinary ACL with the same resource, pattern type, operation and host, whose principal is the group. The authorizer honours it for the members of the group |
 
@@ -196,8 +232,13 @@ takes a principal that the ACLs allow to alter the cluster, or a
 lets its two members read a topic in the consumer groups of a prefix, and
 one with a `DENY` ACL.
 
-```console
-$ rbac import --file docs/examples/role-acls.json --format role-acls
+<!-- run -->
+```bash
+rbac import --file docs/examples/role-acls.json --format role-acls
+```
+
+<!-- output -->
+```text
 + membership of User:alice in Group:orders-readers
 + membership of User:bob in Group:orders-readers
 + ACL allow Group:orders-readers Read on topic orders
@@ -209,12 +250,25 @@ Wrote 4 records; skipped 1.
 Afterwards `User:alice` and `User:bob` are allowed what the ACLs of the
 role allowed, and the command says why:
 
-```console
-$ rbac group list
+<!-- run -->
+```bash
+rbac group list
+```
+
+<!-- output -->
+```text
 GROUP           MEMBER
 orders-readers  User:alice
 orders-readers  User:bob
-$ rbac who-can --operation Read --topic orders
+```
+
+<!-- run -->
+```bash
+rbac who-can --operation Read --topic orders
+```
+
+<!-- output -->
+```text
 Read on topic orders:
 
 User:alice  allowed
@@ -225,16 +279,42 @@ User:bob  allowed
 Not counted: what the brokers' own settings allow (super.users, allow.everyone.if.no.acl.found).
 ```
 
-## A file that cannot be read
+Importing the file again changes nothing:
 
-```console
-$ rbac import --file bindings.json --format role-bindings
-error: bindings.json: line 14, column 3: [2]: "role" is required
-$ echo $?
-2
+<!-- run -->
+```bash
+rbac import --file docs/examples/role-acls.json --format role-acls
+rbac group list
 ```
 
-The place is the line and the column where the object starts that lacks the
+<!-- output: excerpt -->
+```text
+GROUP           MEMBER
+orders-readers  User:alice
+orders-readers  User:bob
+```
+
+## A file that cannot be read
+
+<!-- run: exit 2 -->
+```bash
+cat > bindings.json <<'JSON'
+[
+  {"principal": "User:alice", "role": "DeveloperRead",
+   "resourcePatterns": [{"resourceType": "Topic", "name": "orders", "patternType": "LITERAL"}]},
+  {"principal": "User:bob",
+   "resourcePatterns": [{"resourceType": "Topic", "name": "orders", "patternType": "LITERAL"}]}
+]
+JSON
+rbac import --file bindings.json --format role-bindings
+```
+
+<!-- output -->
+```text
+error: bindings.json: line 4, column 3: [1]: "role" is required
+```
+
+The status is 2. The place is the line and the column where the object starts that lacks the
 field, and the way to it from the top of the file. Nothing was written, and
 the cluster was not asked anything.
 

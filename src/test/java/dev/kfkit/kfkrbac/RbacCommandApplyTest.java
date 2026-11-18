@@ -160,9 +160,6 @@ class RbacCommandApplyTest {
         assertEquals(new Commands.Ran(0, "Nothing to change: the cluster has what the file has.\n", ""), again);
         assertEquals(after, cluster.records);
         assertEquals(0, cluster.created + cluster.deleted);
-        assertTrue(Files.readString(Path.of("docs/command.md")).contains("$ rbac apply --file access.json --dry-run\n"
-                + dry.out() + "$ rbac apply --file access.json\n" + applied.out()
-                + "$ rbac apply --file access.json\n" + again.out() + "```"), "docs/command.md shows these three runs");
         assertEquals(new Commands.Ran(0, "Nothing to change: the cluster has what the file has.\n", ""),
                 run(cluster, "apply", "--file", file.toString(), "--dry-run"));
     }
@@ -212,8 +209,6 @@ class RbacCommandApplyTest {
 
         assertEquals(new Commands.Ran(0, difference + "Created 1, deleted 0; 2 not in the file left as they are, as"
                 + " --no-delete says.\n", ""), applied);
-        assertTrue(Files.readString(Path.of("docs/command.md")).contains("$ rbac apply --file access.json --no-delete\n"
-                + applied.out() + "```"), "docs/command.md shows this run");
         Set<AclBinding> withIt = new HashSet<>(before);
         withIt.add(PAYMENTS_READ);
         assertEquals(withIt, cluster.records);

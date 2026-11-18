@@ -433,8 +433,8 @@ the top has it, is not a binding and grants nothing. It is one of these:
   `Connector:` on a group or a transactional ID
   ([Reserved names](#reserved-names)).
 
-`RbacAuthorizer` refuses to create such a record, whoever asks, and says
-what is wrong with it. An operator who meant "let `User:bob` write
+`RbacAuthorizer` refuses to create such a record, for a super user too,
+and says what is wrong with it. An operator who meant "let `User:bob` write
 `billing.orders`" and took the role for a principal gets:
 
 <!-- run: exit 1 -->
