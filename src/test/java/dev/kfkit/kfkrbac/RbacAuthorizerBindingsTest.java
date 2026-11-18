@@ -36,6 +36,7 @@ import static org.apache.kafka.common.resource.ResourceType.TRANSACTIONAL_ID;
 import static org.apache.kafka.server.authorizer.AuthorizationResult.ALLOWED;
 import static org.apache.kafka.server.authorizer.AuthorizationResult.DENIED;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -58,6 +59,7 @@ import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.acl.AclBinding;
 import org.apache.kafka.common.acl.AclBindingFilter;
 import org.apache.kafka.common.acl.AclOperation;
+import org.apache.kafka.common.errors.AuthorizerNotReadyException;
 import org.apache.kafka.common.metrics.KafkaMetric;
 import org.apache.kafka.common.metrics.Metrics;
 import org.apache.kafka.common.metrics.internals.PluginMetricsImpl;
@@ -109,6 +111,34 @@ class RbacAuthorizerBindingsTest {
             authorizer = null;
             metrics.close();
         }
+    }
+
+    // --- before the records are loaded -------------------------------------------
+
+    /**
+     * The parent's rule covers the roles, and there is no rule of ours:
+     * until the node has loaded the ACL records, a request is not decided,
+     * by a binding that has already arrived or by anything else, and a
+     * super user is answered.
+     */
+    @Test
+    void untilTheRecordsAreLoadedNothingIsDecidedForAnyoneButASuperUser() {
+        metrics = new Metrics();
+        authorizer = new RbacAuthorizer();
+        authorizer.configure(Map.of(StandardAuthorizer.SUPER_USERS_CONFIG, "User:admin"));
+        authorizer.withPluginMetrics(new PluginMetricsImpl(metrics, Map.of()));
+        authorizer.addAcl(Uuid.randomUuid(), binding("DeveloperWrite:User:alice", BILLING));
+
+        assertThrows(AuthorizerNotReadyException.class, () -> can("alice", WRITE, TOPIC, ORDERS));
+        assertThrows(AuthorizerNotReadyException.class, () -> can("bob", WRITE, TOPIC, ORDERS));
+        assertThrows(AuthorizerNotReadyException.class, () -> byType("alice", WRITE, TOPIC));
+        assertEquals(ALLOWED, can("admin", WRITE, TOPIC, ORDERS));
+
+        authorizer.completeInitialLoad();
+
+        assertEquals(ALLOWED, can("alice", WRITE, TOPIC, ORDERS));
+        assertEquals(DENIED, can("bob", WRITE, TOPIC, ORDERS));
+        assertEquals(ALLOWED, byType("alice", WRITE, TOPIC));
     }
 
     // --- AC1: records arrive and leave ------------------------------------------
