@@ -281,6 +281,35 @@ class RbacAuthorizerTest {
         assertTrue(log.contains("bindings not loaded"), log);
     }
 
+    @Test
+    void aRoleLookupThatKeepsFailingIsLoggedOnceAndEveryRequestIsDenied() {
+        start(new Failing());
+
+        String log = stderrOf(() -> {
+            for (int i = 0; i < 5; i++) {
+                assertEquals(DENIED, read("bob", INVOICES));
+                assertEquals(DENIED, writeAnyTopic("bob"));
+            }
+        });
+
+        assertEquals(1, occurrences(log, "ERROR dev.kfkit.kfkrbac.RbacAuthorizer - Role lookup failed"), log);
+        assertEquals(1, occurrences(log, "IllegalStateException: bindings not loaded"), log);
+    }
+
+    @Test
+    void withTheIntervalAtZeroEveryFailingRoleLookupIsLogged() {
+        start(new Failing(), Map.of(DeniedLog.INTERVAL_CONFIG, "0"));
+
+        String log = stderrOf(() -> {
+            for (int i = 0; i < 5; i++) {
+                assertEquals(DENIED, read("bob", INVOICES));
+                assertEquals(DENIED, writeAnyTopic("bob"));
+            }
+        });
+
+        assertEquals(10, occurrences(log, "ERROR dev.kfkit.kfkrbac.RbacAuthorizer - Role lookup failed"), log);
+    }
+
     // --- AC6: still a ClusterMetadataAuthorizer -------------------------------
 
     @Test
@@ -408,8 +437,14 @@ class RbacAuthorizerTest {
     // --- helpers -------------------------------------------------------------
 
     private void start(Roles roles, StandardAcl... acls) {
+        start(roles, Map.of(), acls);
+    }
+
+    private void start(Roles roles, Map<String, String> configs, StandardAcl... acls) {
         authorizer = new RbacAuthorizer(roles);
-        authorizer.configure(Map.of(StandardAuthorizer.SUPER_USERS_CONFIG, "User:admin"));
+        Map<String, String> all = new HashMap<>(configs);
+        all.put(StandardAuthorizer.SUPER_USERS_CONFIG, "User:admin");
+        authorizer.configure(all);
         authorizer.withPluginMetrics(new PluginMetricsImpl(new Metrics(), Map.of()));
         Map<Uuid, StandardAcl> snapshot = new HashMap<>();
         for (StandardAcl acl : acls) {
@@ -457,6 +492,14 @@ class RbacAuthorizerTest {
             AclPermissionType permission) {
         return new StandardAcl(resource.resourceType(), resource.name(), resource.patternType(), principal, host,
                 operation, permission);
+    }
+
+    private static int occurrences(String text, String part) {
+        int n = 0;
+        for (int at = text.indexOf(part); at >= 0; at = text.indexOf(part, at + part.length())) {
+            n++;
+        }
+        return n;
     }
 
     private static int count(Iterable<?> items) {

@@ -65,13 +65,22 @@ final class Logs {
      * requests of the whole suite would be written out.
      */
     static void atDebug(String logger, Runnable code) {
+        atLevel(logger, 10, code);
+    }
+
+    /** Runs the code with the logger at {@code TRACE}, where the broker's authorizer writes every answer. */
+    static void atTrace(String logger, Runnable code) {
+        atLevel(logger, 0, code);
+    }
+
+    private static void atLevel(String logger, int wanted, Runnable code) {
         try {
             Object log = Class.forName("org.slf4j.LoggerFactory").getMethod("getLogger", String.class)
                     .invoke(null, logger);
             Field level = log.getClass().getDeclaredField("currentLogLevel");
             level.setAccessible(true);
             int before = level.getInt(log);
-            level.setInt(log, 10); // DEBUG
+            level.setInt(log, wanted); // 0 TRACE, 10 DEBUG
             try {
                 code.run();
             } finally {

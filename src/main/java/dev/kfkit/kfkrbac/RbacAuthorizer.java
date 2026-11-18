@@ -27,7 +27,6 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import java.util.function.IntFunction;
 
@@ -39,12 +38,11 @@ import org.apache.kafka.common.acl.AclOperation;
 import org.apache.kafka.common.acl.AclPermissionType;
 import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.common.errors.ApiException;
+import org.apache.kafka.common.errors.AuthorizerNotReadyException;
 import org.apache.kafka.common.errors.ClusterAuthorizationException;
 import org.apache.kafka.common.errors.InvalidRequestException;
 import org.apache.kafka.common.metrics.Gauge;
-import org.apache.kafka.common.metrics.Metrics;
 import org.apache.kafka.common.metrics.PluginMetrics;
-import org.apache.kafka.common.metrics.internals.PluginMetricsImpl;
 import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.resource.PatternType;
 import org.apache.kafka.common.resource.Resource;
@@ -81,12 +79,10 @@ import org.slf4j.LoggerFactory;
  *
  * <p>The parent answers {@code DENIED} both when a deny ACL matches and when
  * no ACL allows. To tell the two apart, the deny ACLs, and only those, are
- * also fed to a private second {@link StandardAuthorizer} that holds, besides
- * them, one ACL allowing everyone everything on every resource type. A deny
- * beats an allow, so it answers {@code DENIED} exactly when a deny ACL
- * matches, by Kafka's own matching rules. It is asked only after the parent
- * has denied and a role has granted, so a request an ACL allows costs what it
- * costs without roles.
+ * also kept in an {@link AclSet}, which says whether one matches by the rules
+ * the parent matches them with, and writes nothing to the broker's
+ * authorizer log. It is asked only after the parent has denied and a role
+ * has granted, so a request an ACL allows costs what it costs without roles.
  *
  * <p>A principal is also the groups that membership records put it in. A
  * role bound to a group is held by its members, and an ordinary
@@ -151,14 +147,6 @@ public class RbacAuthorizer extends StandardAuthorizer {
     private record HeldBack(AuthorizableRequestContext requestContext, List<Action> actions) {
     }
 
-    /**
-     * What makes the private authorizer allow whatever no deny matches. Its
-     * {@code allow.everyone.if.no.acl.found} would not do: that applies only
-     * to a resource no ACL at all names, and a deny for another principal,
-     * host or operation names it.
-     */
-    private static final Map<Uuid, StandardAcl> ALLOW_EVERYTHING = allowEverything();
-
     /** {@code ALTER} on the cluster, asked without a line in the broker's log. */
     private static final Action ALTER_THE_CLUSTER = new Action(AclOperation.ALTER,
             new ResourcePattern(ResourceType.CLUSTER, Resource.CLUSTER_NAME, PatternType.LITERAL), 1, false, false);
@@ -178,14 +166,14 @@ public class RbacAuthorizer extends StandardAuthorizer {
     /** The ACLs of groups among those records, which {@link #bindings} feeds. */
     private final GroupAcls groupAcls;
 
-    /** The deny ACLs of the parent and {@link #ALLOW_EVERYTHING}: denies exactly when a deny ACL matches. */
-    private final StandardAuthorizer denies = new StandardAuthorizer();
+    /** The deny ACLs of the parent. */
+    private final AclSet denies = new AclSet();
 
-    /** The deny ACLs {@link #denies} holds, by ID. Written by the metadata thread only. */
-    private final Map<Uuid, StandardAcl> denyAcls = new ConcurrentHashMap<>();
+    /** Whether the ACLs are loaded: until then the deny ACLs are not known, and "not ready" is the answer. */
+    private volatile boolean loaded;
 
-    /** The private authorizer's own metrics; never reported. */
-    private final Metrics denyMetrics = new Metrics();
+    /** Logs a role lookup that failed, at most once per interval. */
+    private final LookupFailures lookupFailures;
 
     /** Publishes the verdicts as kfkwho's metrics; null unless {@link #METRICS_ENABLED_CONFIG} is on. */
     private volatile AccessRecorder recorder;
@@ -218,20 +206,16 @@ public class RbacAuthorizer extends StandardAuthorizer {
         this.groupAcls = bindings.groupAcls();
         Function<AuthorizableRequestContext, List<RoleBinding>> held = context -> bindings.heldBy(principal(context));
         this.denials = new DeniedLog(held, (context, action) -> denied(context, action.operation(),
-                action.resourcePattern(), action.resourceReferenceCount()));
+                action.resourcePattern()));
         this.audit = new RoleAudit(held, (context, action) -> groupAcls.allowing(context, principal(context), action));
-        denies.withPluginMetrics(new PluginMetricsImpl(denyMetrics, Map.of()));
-        denies.loadSnapshot(ALLOW_EVERYTHING);
+        this.lookupFailures = new LookupFailures();
     }
 
     @Override
     public void configure(Map<String, ?> configs) {
         denials.configure(configs);
+        lookupFailures.configure(configs);
         super.configure(configs);
-        Map<String, Object> denyConfigs = new HashMap<>(configs);
-        denyConfigs.remove(SUPER_USERS_CONFIG);
-        denyConfigs.put(ALLOW_EVERYONE_IF_NO_ACL_IS_FOUND_CONFIG, "false");
-        denies.configure(denyConfigs);
         Object enabled = configs.get(METRICS_ENABLED_CONFIG);
         if (enabled != null
                 && (Boolean) ConfigDef.parseType(METRICS_ENABLED_CONFIG, enabled, ConfigDef.Type.BOOLEAN)) {
@@ -252,11 +236,11 @@ public class RbacAuthorizer extends StandardAuthorizer {
 
     @Override
     public void completeInitialLoad() {
-        denies.completeInitialLoad();
+        loaded = true;
         super.completeInitialLoad();
     }
 
-    // The order of the updates below keeps a deny ACL in the private authorizer
+    // The order of the updates below keeps a deny ACL in the set of deny ACLs
     // for as long as the parent has it: between the two updates a request may see
     // a deny that is not there yet or no longer there, never miss one that is.
     // The bindings follow the parent: a record it refuses is not read as a binding.
@@ -264,8 +248,7 @@ public class RbacAuthorizer extends StandardAuthorizer {
     @Override
     public void addAcl(Uuid id, StandardAcl acl) {
         if (acl.permissionType() == AclPermissionType.DENY) {
-            denies.addAcl(id, acl);
-            denyAcls.put(id, acl);
+            denies.add(id, acl);
         }
         super.addAcl(id, acl);
         bindings.add(id, acl);
@@ -275,9 +258,7 @@ public class RbacAuthorizer extends StandardAuthorizer {
     public void removeAcl(Uuid id) {
         super.removeAcl(id);
         bindings.remove(id);
-        if (denyAcls.remove(id) != null) {
-            denies.removeAcl(id);
-        }
+        denies.remove(id);
     }
 
     @Override
@@ -291,17 +272,15 @@ public class RbacAuthorizer extends StandardAuthorizer {
         // Old and new denies together while the parent switches, then the new ones.
         Map<Uuid, StandardAcl> both = new HashMap<>(newDenies);
         Set<StandardAcl> present = new HashSet<>(newDenies.values());
-        denyAcls.forEach((id, acl) -> {
+        denies.all().forEach((id, acl) -> {
             if (!both.containsKey(id) && present.add(acl)) {
                 both.put(id, acl);
             }
         });
-        denies.loadSnapshot(withAllowEverything(both));
+        denies.load(both);
         super.loadSnapshot(acls);
         bindings.load(acls);
-        denies.loadSnapshot(withAllowEverything(newDenies));
-        denyAcls.clear();
-        denyAcls.putAll(newDenies);
+        denies.load(newDenies);
     }
 
     @Override
@@ -451,8 +430,7 @@ public class RbacAuthorizer extends StandardAuthorizer {
                 }
             }
         } catch (RuntimeException e) {
-            LOG.error("Role lookup failed for {} {} on any {}; denied", requestContext.principal(), op,
-                    resourceType, e);
+            lookupFailures.failed(requestContext.principal(), op, "any " + resourceType, e);
             cause = DeniedLog.Cause.ROLES_FAILED;
         }
         denials.deniedOnAnyResource(requestContext, op, resourceType, cause);
@@ -575,8 +553,6 @@ public class RbacAuthorizer extends StandardAuthorizer {
     @Override
     public void close() throws IOException {
         try {
-            denies.close();
-            denyMetrics.close();
             groupAcls.close();
         } finally {
             try {
@@ -614,13 +590,11 @@ public class RbacAuthorizer extends StandardAuthorizer {
                         && groupAcls.allows(requestContext, principal, action);
             }
             if (granted
-                    && !denied(requestContext, action.operation(), action.resourcePattern(),
-                            action.resourceReferenceCount())) {
+                    && !denied(requestContext, action.operation(), action.resourcePattern())) {
                 return true;
             }
         } catch (RuntimeException e) {
-            LOG.error("Role lookup failed for {} {} on {}; denied", requestContext.principal(),
-                    action.operation(), action.resourcePattern(), e);
+            lookupFailures.failed(requestContext.principal(), action.operation(), action.resourcePattern(), e);
             consulted = false;
         }
         denials.denied(requestContext, action, consulted);
@@ -743,31 +717,23 @@ public class RbacAuthorizer extends StandardAuthorizer {
         } else {
             return true; // not a pattern a binding can have: grants nothing
         }
-        return denied(requestContext, op, new ResourcePattern(pattern.resourceType(), name, PatternType.LITERAL), 1);
+        return denied(requestContext, op, new ResourcePattern(pattern.resourceType(), name, PatternType.LITERAL));
     }
 
-    private boolean denied(AuthorizableRequestContext requestContext, AclOperation op, ResourcePattern resource,
-            int resourceReferenceCount) {
-        Action quiet = new Action(op, resource, resourceReferenceCount, false, false);
-        return denies.authorize(requestContext, List.of(quiet)).get(0) == AuthorizationResult.DENIED
-                || groupAcls.denied(denies, requestContext, quiet);
-    }
-
-    private static Map<Uuid, StandardAcl> allowEverything() {
-        Map<Uuid, StandardAcl> acls = new HashMap<>();
-        for (ResourceType type : ResourceType.values()) {
-            if (type != ResourceType.ANY && type != ResourceType.UNKNOWN) {
-                acls.put(Uuid.randomUuid(), new StandardAcl(type, ResourcePattern.WILDCARD_RESOURCE,
-                        PatternType.LITERAL, "User:*", "*", AclOperation.ALL, AclPermissionType.ALLOW));
-            }
+    /**
+     * Whether a deny ACL matches the operation on a literal resource, for
+     * the principal or for one of its groups: by the parent's rules, and
+     * without a line in the broker's authorizer log.
+     *
+     * @throws AuthorizerNotReadyException before the ACLs are loaded
+     */
+    private boolean denied(AuthorizableRequestContext requestContext, AclOperation op, ResourcePattern resource) {
+        if (!loaded) {
+            throw new AuthorizerNotReadyException();
         }
-        return Map.copyOf(acls);
-    }
-
-    private static Map<Uuid, StandardAcl> withAllowEverything(Map<Uuid, StandardAcl> denyAcls) {
-        Map<Uuid, StandardAcl> acls = new HashMap<>(denyAcls);
-        acls.putAll(ALLOW_EVERYTHING);
-        return acls;
+        KafkaPrincipal principal = principal(requestContext);
+        String host = requestContext.clientAddress().getHostAddress();
+        return denies.matches(principal, host, op, resource) || groupAcls.denied(principal, host, op, resource);
     }
 
     /** The principal as the ACLs see it: a plain {@link KafkaPrincipal}, whatever the builder made. */
