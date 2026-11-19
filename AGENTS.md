@@ -47,7 +47,10 @@ defect, not a trade-off. The map:
   commit messages or comments in code. Say what this does. The one exception
   is an identifier the code cannot do without: a package or a class in an
   import, the coordinates of a dependency, a configuration key. In prose a
-  component goes by its own name, without the vendor's.
+  component goes by its own name, without the vendor's. A tool the
+  repository ships something for is named where that thing is described,
+  and nowhere else: the skill in `claude-plugin/` is for Claude Code, and
+  the README says so.
 - **Granting on failure.** An exception, a binding that cannot be read, a
   role that is unknown, a store that is not loaded: none of them is ever
   `ALLOWED`. The answer is the ACLs' verdict, `DENIED`, or "not ready".

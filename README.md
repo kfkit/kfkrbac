@@ -89,7 +89,7 @@ jar, its SHA-256 and a keyless signature; how to verify them is in
 ### With Claude Code
 
 The repository carries a skill for whoever adopts kfkrbac with
-[Claude Code](https://claude.com/claude-code): what to find out before
+[Claude Code](https://claude.com/product/claude-code): what to find out before
 installing, the order of the steps, how to bind and delegate roles, what
 the settings trade, and what not to do, each step pointing at the section
 of the [documentation](#documentation) it rests on.
