@@ -255,7 +255,10 @@ The jar carries the latest release of kfkwho. A new one is bundled as soon
 as it is out, before any issue: the routine looks for one at the start of
 every run.
 
-1. `scripts/bump-kfkwho.sh` (or `scripts/bump-kfkwho.sh X.Y.Z`). It checks
+1. `scripts/bump-kfkwho.sh` (or `scripts/bump-kfkwho.sh X.Y.Z`). The
+   latest release is the latest on Maven Central: the routine's sandbox
+   reaches Central, release downloads and `raw.githubusercontent.com`, and
+   nothing else of kfkwho's on GitHub. It checks
    the jar against the SHA-256 its release states and against the jar on
    Maven Central, then writes the version and both SHA-256 into
    `build.gradle.kts` and moves the links of `docs/` to the new tag
