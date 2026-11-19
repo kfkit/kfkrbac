@@ -7,6 +7,12 @@ major version is 0.
 
 ## Unreleased
 
+### Changed
+
+- The jar carries kfkwho 0.1.1, where it carried 0.1.0. Its code, metrics
+  and settings are the same; 0.1.1 is the first kfkwho release on Maven
+  Central.
+
 ## 0.1.1 - 2026-11-18
 
 ### Added

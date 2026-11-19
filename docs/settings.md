@@ -41,7 +41,7 @@ The authorizer also reads settings that are not its own:
 - **The `kfkwho.*` settings**, and `process.roles`, only with
   `kfkrbac.metrics.enabled=true`: they are kfkwho's, of the version inside
   the jar, and are in
-  [its reference](https://github.com/kfkit/kfkwho/blob/v0.1.0/docs/config.md).
+  [its reference](https://github.com/kfkit/kfkwho/blob/v0.1.1/docs/config.md).
   A wrong value then fails the start of the node with a message that names
   the setting. Without `kfkrbac.metrics.enabled=true` none of them is read.
 

@@ -35,8 +35,8 @@ val brokerVersion = providers.gradleProperty("brokerVersion").getOrElse(kafkaVer
 // needs them too: of the jar, the content of kfkwho-<version>.jar.sha256 in
 // the release; of the exporter rules the integration tests use,
 // `shasum -a 256 jmx-exporter/kfkwho.yml` at the tag.
-val kfkwhoVersion = "0.1.0"
-val kfkwhoSha256 = "6d79dd82f5a2dc4af21305977902b79d37f0c307b7457ea0e53206aaba7de88a"
+val kfkwhoVersion = "0.1.1"
+val kfkwhoSha256 = "ff29753d87777fbf2eda62855e905aa2c3f2f9d03be9fc7ebf709ff19427cac0"
 val kfkwhoRulesSha256 = "e520ea65994a20218901acc20df38678f4df221ce1651b75085712940762cf65"
 val kfkwhoRepository = "https://github.com/kfkit/kfkwho"
 val kfkwhoPackage = "dev.kfkit.kfkwho"
@@ -66,10 +66,11 @@ java {
 
 repositories {
     mavenCentral()
-    // kfkwho is released on GitHub and is not on Maven Central yet. Its jar is
-    // looked for in its release and its exporter rules at the release's tag,
-    // nowhere else, and nothing else is looked for there. There is no
-    // metadata: the files are all there is.
+    // kfkwho's jar is on Maven Central too from 0.1.1, the same file; it is
+    // taken from its GitHub release, where its exporter rules are, so that one
+    // place answers for both. Its jar is looked for in its release and its
+    // exporter rules at the release's tag, nowhere else, and nothing else is
+    // looked for there. There is no metadata: the files are all there is.
     exclusiveContent {
         forRepository {
             ivy {
