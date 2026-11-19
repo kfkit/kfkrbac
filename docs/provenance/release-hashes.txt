@@ -6,6 +6,9 @@ Copyright:  2026 Ivan Abramov, Apache-2.0
 
 Each line names a signed git tag, the tag object, the commit it points at
 (a hash of the whole source tree) and the SHA-256 of the source archive
-produced by `git archive --format=tar <tag>`, with the version of git used.
+produced by `git archive --format=tar <tag>` with git 2.55.0.
 
-No release yet.
+First release: v0.1.0, 2026-11-18, https://github.com/kfkit/kfkrbac/releases/tag/v0.1.0
+
+v0.1.0 tag=80968626a7b48d6db3de1063e0b316dd5b115f50 commit=d3e44f0b80a9dd2bcb22a52093f36430dc8ca96d archive_sha256=3370ee80b4e2929a1faced77882f813aa275513f5f09a2a209a3bbb26f3a343a
+v0.1.1 tag=b282d2f430f056deb6a2c1d3b2f3db6c7aa588ba commit=bc44cd7ac9e5c5e8649bbf4358c105e088360517 archive_sha256=88c9b6c26c77f179c4ec18b27b06cc7cff959317726e1dc2c926c65823491cfe

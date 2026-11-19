@@ -3,8 +3,9 @@
 How to check that a kfkrbac jar is the one this repository built, and what
 is kept here as evidence of when each release existed.
 
-There is no release yet, so the commands of this page have not been run on
-one.
+The commands of this page were run by hand on the published files of
+v0.1.0 and v0.1.1. The tests do not run them: they need the releases page,
+Maven Central and a keyserver over the network.
 
 ## A released jar
 
@@ -23,7 +24,7 @@ GitHub.
 Download the three files into one directory and check them, from the
 weakest proof to the strongest:
 
-<!-- not run: it needs a release, and there is none yet -->
+<!-- not run: it needs the files of a release over the network, which the tests do not have -->
 ```bash
 X=X.Y.Z
 
@@ -48,7 +49,7 @@ instead of the regular expression.
 
 The jar's manifest names its version:
 
-<!-- not run: it needs a release, and there is none yet -->
+<!-- not run: it needs the files of a release over the network, which the tests do not have -->
 ```bash
 unzip -p "kfkrbac-$X.jar" META-INF/MANIFEST.MF | grep Implementation-Version
 ```
@@ -76,16 +77,17 @@ gpg --verify "kfkrbac-$X.jar.asc" "kfkrbac-$X.jar"
 ## Release hashes
 
 `release-hashes.txt` lists the signed tags of the first and the current
-release with their commit and source-archive hashes, for timestamping.
-There is no release yet, so it lists none. Once a release exists, the file
-gets its line and an [OpenTimestamps](https://opentimestamps.org) proof,
-`release-hashes.txt.ots`, that the file, and so the code it names, existed
-no later than the Bitcoin block the proof is attached to. The proof depends
-neither on GitHub nor on the signatures above.
+release, v0.1.0 and v0.1.1, with their commit and source-archive hashes,
+for timestamping. A new release takes the place of the current one's line;
+the first one's stays. There is no proof yet: the maintainer adds
+`release-hashes.txt.ots`, an [OpenTimestamps](https://opentimestamps.org)
+proof that the file, and so the code it names, existed no later than the
+Bitcoin block the proof is attached to. The proof depends neither on GitHub
+nor on the signatures above.
 
 Check that a line still matches its tag:
 
-<!-- not run: it needs a release, and there is none yet -->
+<!-- not run: it needs the files of a release over the network, which the tests do not have -->
 ```bash
 git rev-parse vX.Y.Z vX.Y.Z^{commit}
 git archive --format=tar vX.Y.Z | shasum -a 256
@@ -93,7 +95,7 @@ git archive --format=tar vX.Y.Z | shasum -a 256
 
 and, once the proof exists, read it:
 
-<!-- not run: it needs a release, and there is none yet -->
+<!-- not run: it needs the files of a release over the network, which the tests do not have -->
 ```bash
 uvx --from opentimestamps-client ots info docs/provenance/release-hashes.txt.ots
 ```
