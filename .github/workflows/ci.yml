@@ -12,8 +12,9 @@ jobs:
   # Does the pull request touch more than documents? If not, the broker and
   # cluster suites do not run: they would test the same jar as on main. The
   # check and the documents' suite always run, the latter because it runs
-  # the commands of docs/. Documents are *.md, docs/, LICENSE, NOTICE and the
-  # issue templates. A push to main runs everything, and so does a change
+  # the commands of docs/. Documents are *.md, docs/, LICENSE, NOTICE, the
+  # issue templates and the skill for adopters (claude-plugin/,
+  # .claude-plugin/). A push to main runs everything, and so does a change
   # this job could not judge: the conditions below read "not false".
   changes:
     runs-on: ubuntu-latest
@@ -29,7 +30,7 @@ jobs:
           # A pull request is checked out as its merge into the base
           # branch: the first parent is the base.
           if [ "$GITHUB_EVENT_NAME" = pull_request ] && paths=$(git diff --name-only HEAD^1 HEAD) && [ -n "$paths" ]; then
-            if ! printf '%s\n' "$paths" | grep -qvE '(\.md$|^docs/|^LICENSE$|^NOTICE$|^\.github/ISSUE_TEMPLATE/)'; then
+            if ! printf '%s\n' "$paths" | grep -qvE '(\.md$|^docs/|^LICENSE$|^NOTICE$|^\.github/ISSUE_TEMPLATE/|^claude-plugin/|^\.claude-plugin/)'; then
               code=false
             fi
           fi

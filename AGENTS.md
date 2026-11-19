@@ -30,6 +30,7 @@ defect, not a trade-off. The map:
 | `docs/` | operator documentation, one page for each subject; a `bash` block is run by `DocsIT` or says why not |
 | `docs/examples/` | the files the documents and the tests of `apply` and `import` read |
 | `docs/provenance/` | how to verify a released jar, and the release hashes |
+| `claude-plugin/`, `.claude-plugin/marketplace.json` | a Claude Code plugin with one skill, for whoever adopts kfkrbac on a cluster of their own, not for work on this repository: the order to do things in and the mistakes to avoid, each step pointing at a section of `docs/`. The repository is its own marketplace, and `plugin.json` has no `version` on purpose, so every commit reaches those who installed it. The skill changes in the same pull request as the page it points at |
 | `.github/workflows/` | `ci.yml`: the check, and the integration suite for each supported release, a cluster and the documents (a pull request that touches only documents skips the releases and the cluster); `release.yml`: a signed jar from a tag |
 
 ## Forbidden
@@ -46,7 +47,10 @@ defect, not a trade-off. The map:
   commit messages or comments in code. Say what this does. The one exception
   is an identifier the code cannot do without: a package or a class in an
   import, the coordinates of a dependency, a configuration key. In prose a
-  component goes by its own name, without the vendor's.
+  component goes by its own name, without the vendor's. A tool the
+  repository ships something for is named where that thing is described,
+  and nowhere else: the skill in `claude-plugin/` is for Claude Code, and
+  the README says so.
 - **Granting on failure.** An exception, a binding that cannot be read, a
   role that is unknown, a store that is not loaded: none of them is ever
   `ALLOWED`. The answer is the ACLs' verdict, `DENIED`, or "not ready".

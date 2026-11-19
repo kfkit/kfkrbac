@@ -86,6 +86,23 @@ The jar has no dependencies to install next to it. A release carries the
 jar, its SHA-256 and a keyless signature; how to verify them is in
 [Provenance](docs/provenance/README.md).
 
+### With Claude Code
+
+The repository carries a skill for whoever adopts kfkrbac with
+[Claude Code](https://claude.com/product/claude-code): what to find out before
+installing, the order of the steps, how to bind and delegate roles, what
+the settings trade, and what not to do, each step pointing at the section
+of the [documentation](#documentation) it rests on.
+
+```
+/plugin marketplace add kfkit/kfkrbac
+/plugin install kfkrbac@kfkrbac
+```
+
+Or copy `claude-plugin/skills/kfkrbac` into `.claude/skills/` of your own
+repository. The skill is [one file](claude-plugin/skills/kfkrbac/SKILL.md);
+read it before you trust it.
+
 ## A first binding
 
 A principal that is in `super.users`, here `User:admin`, binds the first

@@ -1,0 +1,14 @@
+{
+  "name": "kfkrbac",
+  "description": "kfkrbac for Claude Code: a skill for adopting and operating it.",
+  "owner": {
+    "name": "kfkit"
+  },
+  "plugins": [
+    {
+      "name": "kfkrbac",
+      "source": "./claude-plugin",
+      "description": "A skill for adopting and operating kfkrbac: what to find out before installing, the order of the steps, how to bind and delegate roles, what the settings trade, what not to do."
+    }
+  ]
+}

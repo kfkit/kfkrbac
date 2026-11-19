@@ -1,0 +1,10 @@
+{
+  "name": "kfkrbac",
+  "description": "A skill for adopting and operating kfkrbac: what to find out before installing, the order of the steps, how to bind and delegate roles, what the settings trade, what not to do.",
+  "homepage": "https://kfkit.dev/kfkrbac/",
+  "repository": "https://github.com/kfkit/kfkrbac",
+  "license": "Apache-2.0",
+  "author": {
+    "name": "Ivan Abramov"
+  }
+}
