@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How kfkrbac works</title>
+<meta name="description" content="How kfkrbac adds roles and role bindings to the ACLs of Apache Kafka&reg;: a binding is an ACL record in the cluster's own metadata, in fifteen slides and one small model.">
+<meta name="author" content="Ivan Abramov">
+<!--
+  One static page: no build step, no dependencies, nothing loaded from
+  elsewhere. The pictures are drawn on canvases by the script at the end,
+  pixel by pixel; the demo on slide 10 is a small model of the rules in
+  README.md, docs/roles.md and docs/delegation.md, not the real code.
+-->
+<style>
+  :root {
+    --bg: #fff1e8; --fg: #1d2b53; --muted: #5f574f; --rule: #c2c3c7;
+    --accent: #7e2553; --panel: #ffffff; --key: #ab5236;
+    --screen: #0e1428; --screen-edge: #1d2b53;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b0f1e; --fg: #fff1e8; --muted: #c2c3c7; --rule: #2a3350;
+      --accent: #ffec27; --panel: #131a30; --key: #ffa300;
+      --screen: #060912; --screen-edge: #29366f;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-snap-type: y proximity; scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 17px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  a { color: var(--accent); }
+  .slide {
+    min-height: 100vh; scroll-snap-align: start;
+    display: flex; flex-direction: column; justify-content: center;
+    max-width: 62rem; margin: 0 auto; padding: 3.5rem 1.25rem 4.5rem;
+  }
+  .kicker { color: var(--muted); font-size: .8rem; letter-spacing: .14em; text-transform: uppercase; margin: 0 0 .6rem; }
+  h1, h2 {
+    margin: 0 0 1.1rem; line-height: 1.15; letter-spacing: .02em; text-transform: uppercase;
+    text-shadow: 3px 3px 0 var(--rule);
+  }
+  h1 { font-size: clamp(2.4rem, 8vw, 4.6rem); }
+  h2 { font-size: clamp(1.5rem, 4.4vw, 2.4rem); }
+  p, li { max-width: 46rem; }
+  p { margin: 0 0 1rem; }
+  ul, ol { margin: 0 0 1rem; padding-left: 1.2rem; }
+  li { margin: 0 0 .45rem; }
+  li::marker { content: "\25AA  "; color: var(--accent); }
+  ol.steps { padding-left: 1.8rem; }
+  ol.steps > li::marker { content: counter(list-item) ".  "; font-weight: 700; }
+  strong { color: var(--accent); font-weight: 700; }
+  code { background: var(--panel); border: 1px solid var(--rule); padding: 0 .3em; font-size: .92em; }
+  pre {
+    background: var(--panel); border: 3px solid var(--fg); padding: .9rem 1rem; margin: 0 0 1rem;
+    overflow-x: auto; font-size: .88rem; line-height: 1.5; max-width: 100%;
+  }
+  pre code { background: none; border: 0; padding: 0; }
+  pre.line { white-space: pre-wrap; overflow-wrap: anywhere; }
+  /* A picture is a small game screen, the same in light and dark. */
+  canvas.px {
+    display: block; width: 100%; height: auto; max-width: var(--w, 48rem);
+    image-rendering: pixelated; image-rendering: crisp-edges;
+    background: var(--screen); border: 4px solid var(--screen-edge);
+    box-shadow: 6px 6px 0 var(--rule); margin: .4rem 0 1.4rem;
+  }
+  table { border-collapse: collapse; margin: 0 0 1rem; max-width: 100%; }
+  th, td { text-align: left; vertical-align: top; padding: .4rem .9rem .4rem 0; border-bottom: 2px solid var(--rule); }
+  th { font-size: .8rem; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+  /* A role has one colour, here and in the pictures. */
+  .chip { display: inline-block; min-width: 5.2rem; padding: 0 .45rem; color: #1d2b53; font-weight: 700; text-align: center; }
+  .read { background: #00e436; } .write { background: #ffa300; } .manage { background: #29adff; } .owner { background: #ffec27; }
+  .viewer { background: #c2c3c7; } .cadmin { background: #ff77a8; } .sadmin { background: #ffccaa; }
+  .row { display: flex; flex-wrap: wrap; gap: .45rem; align-items: center; max-width: 48rem; margin: 0 0 .55rem; }
+  .row .lab { min-width: 4.4rem; color: var(--muted); font-size: .8rem; letter-spacing: .1em; text-transform: uppercase; }
+  .row label { font-size: .82rem; }
+  button, select {
+    font: inherit; font-size: .82rem; color: var(--fg); background: var(--panel);
+    border: 3px solid var(--fg); padding: .25rem .6rem;
+  }
+  button { cursor: pointer; box-shadow: 3px 3px 0 var(--rule); }
+  select { padding: .2rem .3rem; max-width: 100%; }
+  button:hover { background: var(--accent); color: var(--bg); }
+  button:active { transform: translate(3px, 3px); box-shadow: none; }
+  button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
+  button:focus-visible, a:focus-visible, select:focus-visible { outline: 3px solid var(--key); outline-offset: 2px; }
+  .readout { max-width: 48rem; font-size: .88rem; display: grid; grid-template-columns: 1fr 1fr; gap: .2rem 1.5rem; margin: .6rem 0 .8rem; }
+  .readout .wide { grid-column: 1 / -1; }
+  .readout b { color: var(--accent); }
+  #feed { list-style: none; padding: 0; margin: 0 0 1rem; max-width: 48rem; font-size: .82rem; color: var(--muted); min-height: 6.6em; }
+  #feed li { margin: 0; max-width: none; }
+  #feed li::marker { content: none; }
+  .hint { color: var(--muted); font-size: .85rem; }
+  nav.pager {
+    position: fixed; right: .8rem; bottom: .7rem; display: flex; align-items: center; gap: .5rem;
+    font-size: .8rem; color: var(--muted); background: var(--bg); padding: .2rem .4rem; border: 2px solid var(--rule);
+  }
+  nav.pager button { padding: 0 .5rem; box-shadow: none; border-width: 2px; }
+  footer { max-width: 62rem; margin: 0 auto; padding: 0 1.25rem 4rem; color: var(--muted); font-size: .8rem; }
+  @media (max-width: 40rem) {
+    body { font-size: 15px; }
+    .readout { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<main>
+
+<section class="slide" id="s1">
+  <p class="kicker">kfkrbac, roles for Apache Kafka&reg;</p>
+  <h1>Roles.<br>On top of<br>the ACLs.</h1>
+  <canvas class="px" data-scene="title" width="192" height="52" style="--w:48rem" role="img"
+    aria-label="Pixel art: a broker, three robots that each carry the badge of a role, and a row of seven badges: the seven roles."></canvas>
+  <p>One jar, one line of configuration, nothing else to run. This is how it works, in fifteen
+     slides and one small model.</p>
+  <p class="hint">Scroll, or use the arrow keys.</p>
+</section>
+
+<section class="slide" id="s2">
+  <p class="kicker">1 &middot; the problem</p>
+  <h2>ACLs multiply</h2>
+  <p>An ACL binds one principal to one resource. With tens of teams and hundreds of topics the
+     ACLs multiply, nobody can say what a team is allowed to do, and bringing one more service on
+     is a list of commands to run.</p>
+  <canvas class="px" data-scene="problem" width="192" height="48" style="--w:48rem" role="img"
+    aria-label="Pixel art: a robot with a question mark stands next to a wall of ACL tiles that keeps growing."></canvas>
+</section>
+
+<section class="slide" id="s3">
+  <p class="kicker">2 &middot; the idea</p>
+  <h2>Name the permissions once</h2>
+  <p>A <strong>role</strong> names a set of permissions once. A <strong>role binding</strong>
+     hands it to a user or a group, for a topic, a prefix or the whole cluster.</p>
+  <canvas class="px" data-scene="idea" width="192" height="48" style="--w:48rem" role="img"
+    aria-label="Pixel art: a pile of ACL tiles on the left; one badge, a role, travels to the robot User:alice, on the prefix billing."></canvas>
+  <p>One binding for one application: a role bound to the prefix <code>billing.</code> covers the
+     topics, the consumer groups and the transactional IDs that start with it.</p>
+  <p>The measure of every choice here: roles without a separate service to deploy, a directory
+     server to depend on, several bindings for one application, or denials that do not say what
+     was missing.</p>
+</section>
+
+<section class="slide" id="s4">
+  <p class="kicker">3 &middot; the roles</p>
+  <h2>Seven roles</h2>
+  <canvas class="px" data-scene="roles" width="192" height="36" style="--w:48rem" role="img"
+    aria-label="Pixel art: seven badges in a row. Five are bound to a name pattern, two to the cluster."></canvas>
+  <table>
+    <tr><th>Role</th><th>Bound to</th><th>For</th></tr>
+    <tr><td><span class="chip read">DeveloperRead</span></td><td>a pattern</td><td>an application that consumes: it reads the topics and joins the consumer groups under its pattern</td></tr>
+    <tr><td><span class="chip write">DeveloperWrite</span></td><td>a pattern</td><td>an application that produces: it writes the topics under its pattern, transactionally if it wants</td></tr>
+    <tr><td><span class="chip manage">DeveloperManage</span></td><td>a pattern</td><td>a team that creates and deletes its own topics and groups, and runs its own connectors, without reading or writing the data</td></tr>
+    <tr><td><span class="chip owner">ResourceOwner</span></td><td>a pattern</td><td>the owner of a pattern: everything on what it covers, and the right to hand out roles inside it</td></tr>
+    <tr><td><span class="chip viewer">ResourceViewer</span></td><td>a pattern</td><td>someone who needs to see what exists under a pattern and how it is configured, without reading the data</td></tr>
+    <tr><td><span class="chip cadmin">ClusterAdmin</span></td><td>the cluster</td><td>an operator who runs the cluster, without reading or writing the data in topics; it does not manage access</td></tr>
+    <tr><td><span class="chip sadmin">SystemAdmin</span></td><td>the cluster</td><td>everything, everywhere, including binding any role to anyone</td></tr>
+  </table>
+  <p>What each grants, operation by operation, is in
+     <a href="https://github.com/kfkit/kfkrbac/blob/main/docs/roles.md">Roles</a>, and a test fails
+     when that table and the code disagree. A role's meaning never changes once it is released.</p>
+</section>
+
+<section class="slide" id="s5">
+  <p class="kicker">4 &middot; the record</p>
+  <h2>A binding is an ACL record</h2>
+  <p>Its principal names the role and the member: <code>DeveloperRead:User:alice</code>, on the
+     prefixed pattern <code>billing.</code>, with the operation <code>All</code>. No client is ever
+     a principal of type <code>DeveloperRead</code>, so the broker's own authorizer never matches
+     the record. <code>RbacAuthorizer</code> reads it as <em>the member holds the role on that
+     pattern</em>.</p>
+  <canvas class="px" data-scene="record" width="192" height="52" style="--w:48rem" role="img"
+    aria-label="Pixel art: a record card with the principal DeveloperRead:User:alice, the topic prefix billing. and the fixed fields All, Allow and any host. Dots carry it to three nodes, controllers included."></canvas>
+  <ul>
+    <li><strong>Nothing else to run.</strong> The record lives in the cluster's metadata next to
+        the ACLs and reaches every node the way an ACL does: no service, no directory server, no
+        topic to create.</li>
+    <li><strong>The tools you have keep working.</strong> The ACL tool, the admin client and
+        whatever manages your ACLs today create, list and delete bindings.</li>
+  </ul>
+<pre><code>kafka-acls.sh --bootstrap-server localhost:9092 --command-config admin.properties \
+  --add --allow-principal DeveloperRead:User:alice --operation All \
+  --topic billing. --resource-pattern-type prefixed</code></pre>
+  <p class="hint">Mind a tool that keeps the ACLs equal to a list in a file: to it a binding that
+     is not in its list is an ACL to delete.</p>
+</section>
+
+<section class="slide" id="s6">
+  <p class="kicker">5 &middot; the decision</p>
+  <h2>How a request is decided</h2>
+  <p><code>RbacAuthorizer</code> is the broker's <code>StandardAuthorizer</code> with roles added.
+     The broker asks it about every resource of every request:</p>
+  <canvas class="px" data-scene="decision" width="192" height="56" style="--w:48rem" role="img"
+    aria-label="Pixel art: a robot walks towards three gates: the ACLs, the deny ACLs, the roles. It is allowed at the first by an ACL, denied at the second by a deny ACL, or allowed or denied at the third by its roles."></canvas>
+  <ol class="steps">
+    <li><strong>The ACLs first</strong>, exactly as <code>StandardAuthorizer</code> answers them.
+        What they allow is allowed, and no role is asked.</li>
+    <li>If the ACLs did not allow it and <strong>a deny ACL</strong> matches it, it is denied.</li>
+    <li>Otherwise it is allowed when <strong>a role</strong> bound to the principal, or to a group
+        it is in, covers it, or an <code>ALLOW</code> ACL of such a group allows it; and denied
+        when none does or the roles cannot be read.</li>
+  </ol>
+  <p>The broker's second question, <em>may this principal do this on any resource of the
+     type</em>, is answered the same way.</p>
+</section>
+
+<section class="slide" id="s7">
+  <p class="kicker">6 &middot; what it guarantees</p>
+  <h2>Roles only add</h2>
+  <p>A role only adds access. What a deny ACL denies stays denied, whatever roles the principal
+     holds, so denying is done with ACLs.</p>
+  <canvas class="px" data-scene="deny" width="192" height="48" style="--w:48rem" role="img"
+    aria-label="Pixel art: a robot that carries the badge of ResourceOwner bounces off a wall labelled deny ACL."></canvas>
+  <ul>
+    <li><strong>Nothing is granted on failure.</strong> An exception, a binding that cannot be
+        read, a role that is unknown: none of them is ever <code>ALLOWED</code>.</li>
+    <li><strong>No request is decided from half of the bindings.</strong> Until a node has loaded
+        the ACL records, its authorizer answers the principals in <code>super.users</code> and
+        nobody else.</li>
+    <li><strong>The ACLs you have keep working</strong>, and nothing changes until the first role
+        is bound.</li>
+  </ul>
+  <p class="hint">One setting to mind: with <code>allow.everyone.if.no.acl.found=true</code> the
+     first binding on a pattern takes away what everyone had on it by default. Leave it at its
+     default, <code>false</code>, to use roles.</p>
+</section>
+
+<section class="slide" id="s8">
+  <p class="kicker">7 &middot; groups</p>
+  <h2>Groups, in the same metadata</h2>
+  <p>A group is a name and the principals that membership records put in it. A membership is an
+     ACL record too: the principal <code>Member:User:alice</code>, on the literal topic name
+     <code>Group:payments</code>. No topic can be called that: a colon is not legal in a topic
+     name.</p>
+  <canvas class="px" data-scene="groups" width="192" height="48" style="--w:48rem" role="img"
+    aria-label="Pixel art: three robots inside a frame labelled Group:payments. One binding of DeveloperRead on the prefix billing. reaches every one of them."></canvas>
+  <ul>
+    <li>A role is bound to a group instead of to every user in it:
+        <code>DeveloperRead:Group:payments</code>.</li>
+    <li>An ordinary <code>ALLOW</code> ACL whose principal is a group works for its members. This
+        is how a set of permissions that no role names is given to many users at once.</li>
+    <li>A group only adds access. A <code>DENY</code> ACL that names a group cannot be created:
+        deny the users by name.</li>
+    <li>There is no directory to connect and nothing else to run. A group is not a member of a
+        group.</li>
+  </ul>
+</section>
+
+<section class="slide" id="s9">
+  <p class="kicker">8 &middot; delegation</p>
+  <h2>The owner of a prefix hands out roles inside it</h2>
+  <p>And nowhere else. Bindings are created and deleted through the ACL API, and the cluster
+     decides each request by who sent it:</p>
+  <canvas class="px" data-scene="delegation" width="192" height="52" style="--w:48rem" role="img"
+    aria-label="Pixel art: bob, with a crown, owns the prefix billing. and passes a role to alice inside it. A role he tries to bind on the name orders, outside the prefix, is refused."></canvas>
+  <table>
+    <tr><th>Who</th><th>May create and delete</th></tr>
+    <tr><td>a principal that the ACLs allow to alter the cluster: one in <code>super.users</code>, or one that an ACL allows <code>Alter</code> on the cluster and none denies</td><td>any binding, any group membership and any ACL, as before there were roles</td></tr>
+    <tr><td>a principal that holds <span class="chip sadmin">SystemAdmin</span></td><td>any binding, any group membership and any ACL</td></tr>
+    <tr><td>a principal that holds <span class="chip owner">ResourceOwner</span></td><td>bindings of the five roles that are bound to a pattern, to users and to groups, on patterns inside what it owns</td></tr>
+    <tr><td>everyone else, a <span class="chip cadmin">ClusterAdmin</span> included</td><td>nothing</td></tr>
+  </table>
+  <p>The decision is made on the controller, when the record is created or deleted: one reason the
+     jar is on the controllers too. A request is decided as a whole, and the caller gets the reason
+     back.</p>
+</section>
+
+<section class="slide" id="s10">
+  <p class="kicker">9 &middot; try it</p>
+  <h2>Bind a role</h2>
+  <canvas class="px" id="sim" width="256" height="112" style="--w:48rem" role="img"
+    aria-label="Model: three users, one node and its resources. The node decides a request in three steps, and who may bind a role by the rules of delegation. The text below the picture says what was asked, the verdict and the reason."></canvas>
+  <div class="row" role="group" aria-label="Who asks">
+    <span class="lab">as</span>
+    <button data-as="User:admin" aria-pressed="false">User:admin</button>
+    <button data-as="User:alice" aria-pressed="true">User:alice</button>
+    <button data-as="User:bob" aria-pressed="false">User:bob</button>
+  </div>
+  <div class="row" role="group" aria-label="Send a request">
+    <span class="lab">request</span>
+    <button data-req="produce">produce to billing.orders</button>
+    <button data-req="consume">consume it in group billing.app</button>
+    <button data-req="consume1">consume it in group billing-1</button>
+    <button data-req="create">create topic billing.invoices</button>
+    <button data-req="outside">produce to orders</button>
+  </div>
+  <div class="row" role="group" aria-label="Bind or unbind a role">
+    <span class="lab">binding</span>
+    <label>role
+      <select id="b-role">
+        <option>DeveloperRead</option><option>DeveloperWrite</option><option>DeveloperManage</option>
+        <option>ResourceOwner</option><option>ResourceViewer</option>
+      </select></label>
+    <label>to
+      <select id="b-member">
+        <option>User:alice</option><option>User:bob</option><option>Group:payments</option>
+      </select></label>
+    <label>on
+      <select id="b-on">
+        <option>prefix billing.</option><option>name billing.orders</option><option>name orders</option>
+        <option>group billing-1</option>
+      </select></label>
+    <button id="bind">bind</button>
+    <button id="unbind">unbind</button>
+  </div>
+  <div class="row" role="group" aria-label="What User:admin sets">
+    <span class="lab">admin</span>
+    <button id="t-member" aria-pressed="false">put User:alice in Group:payments</button>
+    <button id="t-deny" aria-pressed="false">deny User:alice Read on billing.orders</button>
+    <button id="reset">reset</button>
+  </div>
+  <div class="readout" aria-live="polite">
+    <span>asks as <b id="r-as">User:alice</b></span>
+    <span>verdict <b id="r-verdict">nothing asked yet</b></span>
+    <span class="wide">asked <b id="r-asked">nothing yet</b></span>
+    <span class="wide">why <b id="r-why">&ndash;</b></span>
+    <span class="wide">bindings <b id="r-bindings">none</b></span>
+    <span>in Group:payments <b id="r-group">nobody</b></span>
+    <span>ACLs <b id="r-acls">none</b></span>
+  </div>
+  <ol id="feed" aria-label="Latest events"></ol>
+  <p class="hint">A model of the rules above, not the real code: three users, of whom
+     <code>User:admin</code> is in <code>super.users</code>, one group, the five roles that are
+     bound to a pattern, and one question for each thing a request needs. A real client asks more:
+     a producer is first asked whether it may write any topic at all. Consume as
+     <code>User:alice</code>: denied. Bind <code>DeveloperRead</code> to her as
+     <code>User:admin</code> and ask again. Then make <code>User:bob</code> the
+     <code>ResourceOwner</code> of the prefix and bind as him, inside it and outside.</p>
+</section>
+
+<section class="slide" id="s11">
+  <p class="kicker">10 &middot; when it says no</p>
+  <h2>A denial says what was missing</h2>
+  <p>The client's error names a topic or a group and nothing more. The broker's log has the rest,
+     one line for the denied request:</p>
+<pre class="line"><code>Denied User:alice DESCRIBE on GROUP 'billing-1' (request FindCoordinator): no ACL and no role allows it; roles held for GROUP: DeveloperRead on prefix billing.</code></pre>
+  <canvas class="px" data-scene="denied" width="192" height="44" style="--w:48rem" role="img"
+    aria-label="Pixel art: a refused robot with a question mark, and the broker's log next to it: who asked, for what, why not, and the role it does hold."></canvas>
+  <p>Who asked, for what, why not, and which roles the principal does hold: the binding is on
+     <code>billing.</code> and the group is <code>billing-1</code>.</p>
+  <p>The command of the jar answers before a client fails: <code>who-can</code> names who may do
+     an operation on a resource, and why; <code>what-can</code> lists what a principal may do. It
+     also binds and lists, keeps bindings in a file (<code>apply</code>) and brings them over from
+     files of two other shapes (<code>import</code>). It is a convenience, never the only way:
+     everything it does can be done with the ACL tool as well.</p>
+</section>
+
+<section class="slide" id="s12">
+  <p class="kicker">11 &middot; outside the broker</p>
+  <h2>Connectors, from the same bindings</h2>
+  <p>A broker never sees the requests to the REST interface of Kafka Connect. So the workers take
+     the same jar as an extension of their own, with one line in their settings:</p>
+<pre><code>rest.extension.classes=dev.kfkit.kfkrbac.connect.RbacConnectRestExtension</code></pre>
+  <canvas class="px" data-scene="connect" width="192" height="48" style="--w:48rem" role="img"
+    aria-label="Pixel art: a robot sends POST /connectors to a Connect worker. With the badge of DeveloperManage the answer is 201; without it, 403."></canvas>
+  <ul>
+    <li>A connector is the resource <code>Connector:&lt;name&gt;</code>: a binding on the prefix
+        <code>Connector:billing-</code> covers the connectors whose names start with
+        <code>billing-</code>.</li>
+    <li>The caller is whoever the worker authenticated: the user of HTTP basic authentication, or
+        the subject of the client certificate. An anonymous request is refused.</li>
+    <li>The worker reads the bindings again every five seconds. A refusal is a 403 that says
+        which operation on which connector was missing.</li>
+    <li>For connectors only roles grant: an ordinary ACL means nothing to the extension.</li>
+  </ul>
+</section>
+
+<section class="slide" id="s13">
+  <p class="kicker">12 &middot; what is not there</p>
+  <h2>What it does not do</h2>
+  <ul>
+    <li><strong>Nothing for schemas yet.</strong> The roles say what they would grant on the
+        subjects of a schema registry, and a binding for subjects can be written, but nothing
+        reads it.</li>
+    <li><strong>No roles of your own.</strong> There are the seven. A set of permissions that none
+        of them names is given with ordinary ACLs to a group.</li>
+    <li><strong>No groups from a directory.</strong> A principal is in the groups that membership
+        records put it in, and in no other.</li>
+    <li><strong>No dashboard of its own.</strong> The access metrics are those of kfkwho, under
+        its names, and off by default.</li>
+    <li><strong>No way to become a super user.</strong> No role but <code>SystemAdmin</code> lets
+        its holder replace a user's SCRAM credentials.</li>
+    <li><strong>No narrowed listing.</strong> To manage its bindings an owner has to list them,
+        and the listing of ACLs cannot be narrowed to the caller: a <code>ResourceOwner</code>
+        sees every binding and every ACL of the cluster.</li>
+  </ul>
+</section>
+
+<section class="slide" id="s14">
+  <p class="kicker">13 &middot; why believe any of this</p>
+  <h2>How it is tested</h2>
+  <ul>
+    <li><strong>Unit tests</strong> drive the real <code>StandardAuthorizer</code>, the command and
+        the extension's filter, without a broker. A test that shows a role allowing a request has
+        a twin that shows the same request denied without it.</li>
+    <li><strong>Integration tests</strong> run the built jar as the authorizer of real brokers and
+        the extension of real Connect workers, in containers, on Kafka 4.1 to 4.4.</li>
+    <li><strong>The documents are held to the code.</strong> Every shell command in the documents
+        is run against a real broker by a test, and its output compared with what the page shows,
+        or the page says next to it that it was not.</li>
+    <li><strong>Benchmarks</strong> measure the cost of <code>authorize()</code>, which runs for
+        every topic of every Fetch and Produce.</li>
+  </ul>
+  <p>Nothing has run on a production cluster yet.</p>
+</section>
+
+<section class="slide" id="s15">
+  <p class="kicker">14 &middot; go</p>
+  <h2>One jar, one line</h2>
+  <p>On every node, controllers included: copy the jar to <code>libs/</code>, and name the class
+     where the node's configuration names its authorizer.</p>
+<pre><code>cp kfkrbac-*.jar "$KAFKA_HOME/libs/"
+sed -i 's/^authorizer\.class\.name=.*/authorizer.class.name=dev.kfkit.kfkrbac.RbacAuthorizer/' \
+  "$KAFKA_HOME/config/server.properties"</code></pre>
+  <p>Then restart, node by node. That is for a cluster that has an authorizer already. A cluster
+     that has none starts enforcing ACLs the moment it has the line: read
+     <a href="https://github.com/kfkit/kfkrbac/blob/main/docs/install.md">Installation</a> first.
+     A principal that is in <code>super.users</code>, here <code>User:admin</code>, binds the
+     first role:</p>
+<pre><code>kafka-run-class.sh dev.kfkit.kfkrbac.RbacCommand bind \
+  --bootstrap-server localhost:9092 --command-config admin.properties \
+  --role DeveloperRead --member User:alice --prefix billing.</code></pre>
+  <p>Kafka 4.1 and later, in KRaft mode. The jar, its SHA-256 and its signature are on the
+     releases page, and the same jar is on Maven Central as <code>dev.kfkit:kfkrbac</code>.</p>
+  <ul>
+    <li><a href="https://github.com/kfkit/kfkrbac">Source on GitHub</a></li>
+    <li><a href="https://github.com/kfkit/kfkrbac/blob/main/docs/install.md">Installation</a>,
+        <a href="https://github.com/kfkit/kfkrbac/blob/main/docs/roles.md">Roles</a>,
+        <a href="https://github.com/kfkit/kfkrbac/blob/main/docs/bindings.md">Bindings</a>,
+        <a href="https://github.com/kfkit/kfkrbac/blob/main/docs/delegation.md">Delegation</a>,
+        <a href="https://github.com/kfkit/kfkrbac/blob/main/docs/groups.md">Groups</a></li>
+    <li><a href="https://github.com/kfkit/kfkrbac/blob/main/docs/command.md">The command</a>,
+        <a href="https://github.com/kfkit/kfkrbac/blob/main/docs/import.md">Bringing bindings over</a>,
+        <a href="https://github.com/kfkit/kfkrbac/blob/main/docs/connect.md">Kafka Connect</a>,
+        <a href="https://github.com/kfkit/kfkrbac/blob/main/docs/troubleshooting.md">Troubleshooting</a></li>
+    <li><a href="https://github.com/kfkit/kfkrbac/releases">Releases</a></li>
+    <li><a href="https://kfkit.dev/">kfkit</a></li>
+  </ul>
+  <p>The repository carries a skill for AI coding assistants, for adopting kfkrbac: what to find
+     out first, the order of the steps, what not to do.</p>
+<pre><code>/plugin marketplace add kfkit/kfkrbac
+/plugin install kfkrbac@kfkrbac</code></pre>
+  <canvas class="px" data-scene="end" width="192" height="40" style="--w:48rem" role="img"
+    aria-label="Pixel art: the robot waves under the badge of its role."></canvas>
+</section>
+
+</main>
+
+<footer>
+  Written and maintained by <a rel="me" href="https://www.linkedin.com/in/ivan-abramov-8605078/">Ivan Abramov</a>.
+  Apache-2.0. Apache Kafka&reg; is a registered trademark of The Apache Software Foundation;
+  kfkit is not affiliated with or endorsed by the ASF.
+</footer>
+
+<nav class="pager" aria-label="Slides">
+  <button id="prev" aria-label="Previous slide">&larr;</button>
+  <span id="pos">1 / 15</span>
+  <button id="next" aria-label="Next slide">&rarr;</button>
+</nav>
+
+<script>
+"use strict";
+// ---------------------------------------------------------------- palette
+// Sixteen colours, used by every picture.
+const C = {
+  navy: "#1d2b53", plum: "#7e2553", green: "#008751", brown: "#ab5236",
+  dark: "#5f574f", light: "#c2c3c7", white: "#fff1e8", red: "#ff004d",
+  orange: "#ffa300", yellow: "#ffec27", lime: "#00e436", blue: "#29adff",
+  lavender: "#83769c", pink: "#ff77a8", peach: "#ffccaa", black: "#060912",
+};
+// A role is a badge: one letter on its colour, the colour of its chip in the text.
+const BADGE = {
+  DeveloperRead: ["R", C.lime], DeveloperWrite: ["W", C.orange], DeveloperManage: ["M", C.blue],
+  ResourceOwner: ["O", C.yellow], ResourceViewer: ["V", C.light], ClusterAdmin: ["C", C.pink],
+  SystemAdmin: ["S", C.peach],
+};
+
+// ---------------------------------------------------------------- drawing
+const R = (g, x, y, w, h, c) => { g.fillStyle = c; g.fillRect(Math.round(x), Math.round(y), w, h); };
+
+// A 3x5 font: fifteen bits a glyph, rows from the top.
+const FONT = {
+  A: "010101111101101", B: "110101110101110", C: "011100100100011", D: "110101101101110",
+  E: "111100110100111", F: "111100110100100", G: "011100101101011", H: "101101111101101",
+  I: "111010010010111", J: "001001001101010", K: "101101110101101", L: "100100100100111",
+  M: "101111111101101", N: "111101101101101", O: "010101101101010", P: "110101110100100",
+  Q: "010101101110011", R: "110101110101101", S: "011100010001110", T: "111010010010010",
+  U: "101101101101111", V: "101101101101010", W: "101101111111101", X: "101101010101101",
+  Y: "101101010010010", Z: "111001010100111",
+  0: "111101101101111", 1: "010110010010111", 2: "110001010100111", 3: "110001010001110",
+  4: "101101111001001", 5: "111100110001110", 6: "011100111101111", 7: "111001010010010",
+  8: "111101111101111", 9: "111101111001110",
+  ".": "000000000000010", ":": "000010000010000", "-": "000000111000000", "/": "001001010100100",
+  "=": "000111000111000", "+": "000010111010000", "!": "010010010000010", "?": "110001010000010",
+  ">": "100010001010100", "<": "001010100010001", "*": "000101010101000",
+};
+// scale 2 is for the verdict of the demo.
+function text(g, s, x, y, c, scale) {
+  const k = scale || 1;
+  for (const ch of String(s).toUpperCase()) {
+    const bits = FONT[ch];
+    if (bits) for (let i = 0; i < 15; i++) if (bits[i] === "1") R(g, x + (i % 3) * k, y + (i / 3 | 0) * k, k, k, c);
+    x += 4 * k;
+  }
+}
+const textW = s => String(s).length * 4 - 1;
+const centred = (g, s, mid, y, c) => text(g, s, mid - (textW(s) >> 1), y, c);
+
+// A sprite is rows of letters; the legend maps a letter to a colour.
+function sprite(g, rows, x, y, legend) {
+  rows.forEach((row, j) => { for (let i = 0; i < row.length; i++) if (legend[row[i]]) R(g, x + i, y + j, 1, 1, legend[row[i]]); });
+}
+const CROWN = ["y...y...y", "yy.yyy.yy", "yyyyyyyyy", "yryybyyry", "yyyyyyyyy", "ooooooooo"];
+const ROBOT = ["....aa....", "....dd....", ".llllllll.", ".lwnllwnl.", ".llllllll.", ".lnnnnnnl.", ".llllllll.", "dd.llll.dd", "...llll...", "...l..l...", "..dd..dd.."];
+
+function crown(g, x, y) { sprite(g, CROWN, x, y, { y: C.yellow, o: C.orange, r: C.red, b: C.blue }); }
+function robot(g, x, y, f, tint) {
+  const bob = f % 2;
+  sprite(g, ROBOT, x, y + bob, { a: f % 4 < 2 ? C.red : C.yellow, d: C.dark, l: tint || C.light, w: C.white, n: C.navy });
+}
+// A rack: three shelves, each with a light.
+function server(g, x, y, led) {
+  R(g, x, y, 14, 19, C.dark); R(g, x + 1, y + 1, 12, 17, C.lavender);
+  for (let i = 0; i < 3; i++) { R(g, x + 2, y + 2 + i * 5, 10, 4, C.navy); R(g, x + 3, y + 3 + i * 5, 2, 2, led); R(g, x + 7, y + 4 + i * 5, 4, 1, C.dark); }
+  R(g, x - 1, y + 19, 16, 1, C.dark);
+}
+// A tile: one record of the metadata, with a letter.
+function tile(g, x, y, ch, c, ink) { R(g, x, y, 7, 7, c); text(g, ch, x + 2, y + 1, ink || C.navy); }
+// The badge of a role; struck out when the binding was refused.
+function badge(g, x, y, role, struck) {
+  if (struck) { tile(g, x, y, BADGE[role][0], C.dark, C.black); for (let i = 0; i < 7; i++) R(g, x + i, y + 6 - i, 1, 1, C.red); return; }
+  tile(g, x, y, BADGE[role][0], BADGE[role][1]);
+}
+// An ordinary ACL, allow or deny.
+function acl(g, x, y, deny) { tile(g, x, y, deny ? "D" : "A", deny ? C.red : C.lavender, deny ? C.white : C.navy); }
+function frame(g, x, y, w, h, c) { R(g, x, y, w, 1, c); R(g, x, y + h - 1, w, 1, c); R(g, x, y, 1, h, c); R(g, x + w - 1, y, 1, h, c); }
+function ground(g, w, y) { for (let x = 0; x < w; x += 2) R(g, x, y, 1, 1, C.navy); }
+function dots(g, x0, x1, y, c) { for (let x = Math.min(x0, x1); x <= Math.max(x0, x1); x += 3) R(g, x, y, 1, 1, c); }
+function bricks(g, x) { for (let y = 6; y < 40; y += 6) for (let i = 0; i < 2; i++) R(g, x + i * 7 + (y / 6 % 2 ? 3 : 0), y, 6, 5, C.brown); }
+
+// ---------------------------------------------------------------- scenes
+// Each scene draws one frame; f counts frames at about six a second.
+const SCENES = {
+  title(g, f) {
+    text(g, "ACLS + ROLES", 8, 4, C.peach);
+    server(g, 12, 27, C.lime);
+    ["DeveloperRead", "DeveloperWrite", "ResourceOwner"].forEach((role, i) => {
+      const x = 40 + i * 20;
+      badge(g, x + 1, 22 + ((f + i) % 4 < 2 ? 0 : 1), role); robot(g, x, 35, f + i);
+    });
+    text(g, "SEVEN ROLES", 112, 6, C.light);
+    Object.keys(BADGE).forEach((role, i) => badge(g, 112 + i * 11, 16 + ((f + i) % 8 < 4 ? 0 : 1), role));
+    text(g, "ONE JAR", 112, 30, C.peach); text(g, "ONE LINE", 112, 38, C.peach);
+    ground(g, 192, 48);
+  },
+  problem(g, f) {
+    const n = Math.min(75, 20 + (f * 3) % 80);       // the wall grows, and starts again
+    text(g, "ACLS: " + n, 4, 4, C.light);
+    robot(g, 22, 22, f); text(g, "?", 26, 12 + f % 2, C.yellow);
+    ground(g, 60, 34); text(g, "TEAMS X TOPICS", 4, 39, C.lavender);
+    for (let i = 0; i < n; i++) acl(g, 70 + (i % 15) * 8, 5 + (i / 15 | 0) * 8);
+  },
+  idea(g, f) {
+    for (let i = 0; i < 12; i++) R(g, 10 + (i % 4) * 8, 10 + (i / 4 | 0) * 8, 7, 7, C.dark);
+    text(g, "MANY ACLS", 8, 38, C.dark);
+    dots(g, 46, 60, 21, C.lavender);
+    text(g, "ONE ROLE", 66, 6, C.peach);
+    const p = (f % 14) / 13;                          // the role goes to its member
+    badge(g, 70 + Math.round(p * 66), 18, "DeveloperRead");
+    text(g, "ON BILLING.", 66, 38, C.yellow);
+    robot(g, 150, 20, f); text(g, "USER:ALICE", 136, 38, C.light);
+  },
+  roles(g, f) {
+    Object.keys(BADGE).forEach((role, i) => badge(g, 20 + i * 22, 8 + ((f + i * 2) % 8 < 4 ? 0 : 1), role));
+    R(g, 20, 20, 95, 1, C.light); text(g, "BOUND TO A NAME PATTERN", 20, 24, C.light);
+    R(g, 130, 20, 29, 1, C.pink); text(g, "THE CLUSTER", 130, 24, C.pink);
+  },
+  record(g, f) {
+    frame(g, 6, 5, 118, 42, C.light);
+    text(g, "PRINCIPAL", 10, 9, C.lavender);
+    text(g, "DEVELOPERREAD", 10, 16, C.lime); text(g, ":USER:ALICE", 62, 16, C.white);
+    text(g, "TOPIC PREFIX", 10, 25, C.lavender); text(g, "BILLING.", 10, 32, C.yellow);
+    text(g, "ALWAYS", 70, 25, C.lavender); text(g, "ALL ALLOW *", 70, 32, C.white);
+    text(g, "AN ACL RECORD", 10, 40, C.peach);
+    dots(g, 125, 134, 26, C.lavender);
+    text(g, "EVERY NODE", 136, 4, C.light);
+    for (let i = 0; i < 3; i++) server(g, 136 + i * 18, 14, (f >> 1) % 3 === i ? C.lime : C.yellow);
+    text(g, "+ CONTROLLERS", 136, 38, C.light);
+  },
+  decision(g, f) {
+    const gates = [[46, "1 ACLS"], [100, "2 DENY ACL"], [154, "3 ROLES"]];
+    const stories = [[0, true, "ALLOWED BY AN ACL"], [1, false, "DENIED: A DENY ACL MATCHES"],
+                     [2, true, "ALLOWED BY A ROLE"], [2, false, "DENIED: NO ACL AND NO ROLE"]];
+    const [stop, ok, verdict] = stories[(f / 24 | 0) % 4];
+    const target = gates[stop][0] - 13, x = Math.min(4 + (f % 24) * 12, target), there = x === target;
+    gates.forEach(([gx, label], k) => {
+      centred(g, label, gx + 1, 4, C.light);
+      R(g, gx, 13, 3, 28, k === stop && there ? (ok ? C.lime : C.red) : k < stop && x + 10 > gx ? C.dark : C.lavender);
+    });
+    robot(g, x, 29, f, there ? (ok ? C.lime : C.pink) : undefined);
+    ground(g, 192, 42);
+    if (there) centred(g, verdict, 96, 47, ok ? C.lime : C.red);
+  },
+  deny(g, f) {
+    const p = (f % 14) / 13, hit = p > 0.55;
+    const x = hit ? 96 - Math.round((p - 0.55) * 80) : 20 + Math.round(p * 138);
+    bricks(g, 128); text(g, "DENY ACL", 148, 20, C.peach);
+    robot(g, x, 22, f, hit ? C.pink : undefined); badge(g, x + 1, 12, "ResourceOwner");
+    if (hit) text(g, "A DENY ACL BEATS EVERY ROLE", 10, 4, C.red);
+    ground(g, 124, 36); text(g, "ROLES ONLY ADD", 10, 41, C.light);
+  },
+  groups(g, f) {
+    text(g, "GROUP:PAYMENTS", 10, 3, C.lavender); frame(g, 8, 10, 100, 28, C.lavender);
+    for (let i = 0; i < 3; i++) {
+      robot(g, 18 + i * 28, 20, f + i);
+      R(g, 22 + i * 28, 15, 2, 2, (f >> 1) % 3 === i ? C.white : C.lime);   // each member holds the role
+    }
+    text(g, "DEVELOPERREAD", 120, 8, C.lime); badge(g, 130, 18, "DeveloperRead");
+    text(g, "ON BILLING.", 120, 30, C.yellow);
+    dots(g, 110, 128, 21, C.lime);
+    text(g, "ONE BINDING. EVERY MEMBER.", 8, 41, C.light);
+  },
+  delegation(g, f) {
+    text(g, "PREFIX BILLING.", 10, 3, C.yellow); frame(g, 8, 10, 112, 32, C.yellow);
+    crown(g, 18, 12); robot(g, 18, 20, f); text(g, "BOB", 18, 34, C.light);
+    robot(g, 86, 20, f + 1); text(g, "ALICE", 82, 34, C.light);
+    const p = (f % 12) / 11;                          // inside the prefix the role arrives
+    badge(g, 32 + Math.round(p * 46), 22 - Math.round(Math.sin(p * 3.14) * 4), "DeveloperRead");
+    text(g, "NAME ORDERS", 134, 3, C.light); frame(g, 132, 10, 52, 32, C.dark);
+    badge(g, 154, 22, "DeveloperWrite", true);
+    if (f % 4 < 2) text(g, "X", 124, 24, C.red);
+    text(g, "INSIDE: BOUND", 10, 45, C.lime); text(g, "OUTSIDE: REFUSED", 122, 45, C.red);
+  },
+  denied(g, f) {
+    robot(g, 20, 20, f, C.pink); text(g, "?", 24, 10 + f % 2, C.yellow); ground(g, 52, 33);
+    text(g, "BROKER LOG", 60, 2, C.peach); frame(g, 60, 9, 128, 30, C.light);
+    const lines = [["WHO: USER:ALICE", C.white], ["WHAT: DESCRIBE GROUP BILLING-1", C.white],
+                   ["WHY: NO ACL AND NO ROLE", C.red], ["HOLDS: DEVELOPERREAD BILLING.", C.lime]];
+    const n = Math.min(4, 1 + ((f + 8) >> 2) % 7);   // the line is read part by part
+    lines.slice(0, n).forEach(([s, c], i) => text(g, s, 64, 13 + i * 6, c));
+  },
+  connect(g, f) {
+    const has = ((f + 10) / 20 | 0) % 2 === 0, x = Math.min(30 + ((f + 10) % 20) * 8, 90), there = x === 90;
+    text(g, "POST /CONNECTORS", 8, 4, C.light);
+    robot(g, 16, 24, f); if (has) badge(g, 17, 14, "DeveloperManage");
+    ground(g, 90, 37);
+    if (!there) R(g, x, 28, 3, 3, C.white);           // the request on its way
+    R(g, 94, 10, 3, 28, there ? (has ? C.lime : C.red) : C.lavender);
+    text(g, "CONNECT WORKER", 104, 2, C.peach); frame(g, 100, 9, 84, 30, C.lavender);
+    server(g, 106, 14, C.lime);
+    for (let i = 0; i < 3; i++) R(g, 128 + i * 12, 16, 7, 5, C.blue);
+    if (there && has) R(g, 164, 16, 7, 5, C.lime);    // the connector is created
+    if (there) text(g, has ? "201" : "403", 128, 28, has ? C.lime : C.red);
+    text(g, "SAME JAR. SAME BINDINGS.", 8, 41, C.light);
+  },
+  end(g, f) {
+    badge(g, 92, 3 + (f % 4 < 2 ? 0 : 1), "DeveloperRead"); robot(g, 91, 13, f);
+    R(g, 101, 20 - (f % 2) * 2, 2, 2, C.light);       // a wave
+    ground(g, 192, 26); centred(g, "NOTHING ELSE TO RUN", 96, 30, C.peach);
+  },
+};
+
+// ---------------------------------------------------------------- model
+// A small model of the rules: "How a request is decided" of README.md, the
+// columns Topic and Group of docs/roles.md for the five roles that are bound
+// to a pattern, and "Who may bind what" of docs/delegation.md. The reasons are
+// in the words of the broker's log and of the command. It knows nothing of the
+// page: the drawing and the buttons come after it.
+const SUPER = ["User:admin"];                         // super.users of the node
+const GROUP = "Group:payments";
+const DENY = { principal: "User:alice", op: "READ", type: "TOPIC", name: "billing.orders" };
+const GRANTS = {
+  DeveloperRead:   { TOPIC: ["READ", "DESCRIBE"], GROUP: ["READ", "DESCRIBE"] },
+  DeveloperWrite:  { TOPIC: ["WRITE", "DESCRIBE"], GROUP: [] },
+  DeveloperManage: { TOPIC: ["CREATE", "DELETE", "DESCRIBE", "DESCRIBE_CONFIGS"], GROUP: ["DESCRIBE", "DELETE"] },
+  ResourceOwner:   { TOPIC: "all", GROUP: "all" },
+  ResourceViewer:  { TOPIC: ["DESCRIBE", "DESCRIBE_CONFIGS"], GROUP: ["DESCRIBE"] },
+};
+// What a binding can name here. NAMES is a TOPIC record, which covers topics
+// and groups; GROUPS is a GROUP record, what --group-only writes.
+const PATTERNS = {
+  "prefix billing.":     { target: "NAMES", kind: "prefix", name: "billing." },
+  "name billing.orders": { target: "NAMES", kind: "name", name: "billing.orders" },
+  "name orders":         { target: "NAMES", kind: "name", name: "orders" },
+  "group billing-1":     { target: "GROUPS", kind: "name", name: "billing-1" },
+};
+// A request and the questions the model asks the authorizer for it.
+const REQUESTS = {
+  produce:  { does: "produces to billing.orders", asks: [["WRITE", "TOPIC", "billing.orders"]] },
+  consume:  { does: "consumes billing.orders in group billing.app", short: "consumes in group billing.app",
+              asks: [["READ", "TOPIC", "billing.orders"], ["READ", "GROUP", "billing.app"]] },
+  consume1: { does: "consumes billing.orders in group billing-1", short: "consumes in group billing-1",
+              asks: [["READ", "TOPIC", "billing.orders"], ["READ", "GROUP", "billing-1"]] },
+  create:   { does: "creates topic billing.invoices", asks: [["CREATE", "TOPIC", "billing.invoices"]] },
+  outside:  { does: "produces to orders", asks: [["WRITE", "TOPIC", "orders"]] },
+};
+
+let M;
+function reset() { M = { as: "User:alice", bindings: [], member: false, deny: false, last: null, feed: [] }; }
+function say(msg) { M.feed.unshift(msg); M.feed.length = Math.min(M.feed.length, 5); }
+
+// A binding as the command writes it: "DeveloperRead to User:alice on prefix billing.".
+const on = b => b.target === "GROUPS" ? "group " + b.name : b.kind + " " + b.name;
+const phrase = b => b.role + " to " + b.member + " on " + on(b);
+const same = (a, b) => a.role === b.role && a.member === b.member && a.target === b.target && a.kind === b.kind && a.name === b.name;
+// A principal holds its own bindings and those of the group it is in.
+const identities = p => M.member && p === "User:alice" ? [p, GROUP] : [p];
+const heldBy = p => M.bindings.filter(b => identities(p).includes(b.member));
+const reaches = (b, type) => b.target === "NAMES" || type === "GROUP";
+const covers = (b, name) => b.kind === "prefix" ? name.startsWith(b.name) : b.name === name;
+const grants = (role, op, type) => GRANTS[role][type] === "all" || GRANTS[role][type].includes(op);
+
+// One question of the broker: may this principal do this on this resource.
+function decide(p, op, type, name) {
+  const q = { op, type, name, what: p + " " + op + " on " + type + " '" + name + "'" };
+  // 1. The ACLs first, as the broker's own authorizer answers them. No ALLOW
+  //    ACL names a user here, so that is the super user and nobody else.
+  if (SUPER.includes(p)) return { ...q, ok: true, step: 1, why: p + " is in super.users, and no role is asked" };
+  // 2. A deny ACL beats every role.
+  if (M.deny && p === DENY.principal && op === DENY.op && type === DENY.type && name === DENY.name)
+    return { ...q, ok: false, step: 2, why: "a deny ACL matches" };
+  // 3. A role bound to the principal, or to a group it is in.
+  const held = heldBy(p), by = held.find(b => reaches(b, type) && grants(b.role, op, type) && covers(b, name));
+  if (by) return { ...q, ok: true, step: 3, by, why: "allowed by binding " + phrase(by) + (by.member === p ? "" : ", as a member of " + by.member) };
+  const named = held.filter(b => reaches(b, type)).map(b => b.role + " on " + on(b) + (b.member === p ? "" : " as " + b.member)
+    + (grants(b.role, op, type) ? "" : " (does not grant " + op + " on " + type + ")"));
+  const roles = named.length > 20 ? named.slice(0, 20).join(", ") + ", and " + (named.length - 20) + " more"
+    : named.length ? named.join(", ")
+    : "none" + (held.length === 1 ? " (its one role binding is for another resource type)"
+      : held.length ? " (its " + held.length + " role bindings are for other resource types)" : "");
+  return { ...q, ok: false, step: 3, why: "no ACL and no role allows it; roles held for " + type + ": " + roles };
+}
+
+// A request is allowed when every question it asks is; the first denial ends it.
+function request(key) {
+  const p = M.as, req = REQUESTS[key], asked = [];
+  for (const [op, type, name] of req.asks) { asked.push(decide(p, op, type, name)); if (!asked[asked.length - 1].ok) break; }
+  const d = asked[asked.length - 1], who = p + " " + (req.short || req.does);
+  M.last = {
+    kind: "request", ok: d.ok, word: d.ok ? "ALLOWED" : "DENIED", step: d.step, asked, head: p + " " + req.does,
+    why: d.ok ? [...new Set(asked.map(a => a.why))].join("; ") : "Denied " + d.what + ": " + d.why,
+    lines: !d.ok ? [who, d.op + " on " + d.type + " " + d.name, d.step === 2 ? "a deny ACL matches" : "no ACL and no role allows it"]
+      : d.step === 1 ? [who, p + " is in super.users", ""]
+      : [who, "by binding " + d.by.role + " to " + d.by.member, "on " + on(d.by)],
+  };
+  say(M.last.head + ": " + M.last.word);
+  return M.last;
+}
+
+// Whether an owner's binding covers the one that is wanted: a prefix covers
+// the names and the prefixes that start with it, a name only itself; a
+// binding narrowed to groups covers only bindings narrowed to groups.
+const owns = (o, w) => (o.target === "NAMES" || w.target === "GROUPS")
+  && (o.kind === "name" ? w.kind === "name" && w.name === o.name : w.name.startsWith(o.name));
+const pattern = b => "the " + (b.target === "GROUPS" ? "GROUP" : "TOPIC") + " " + b.kind + " '" + b.name + "'";
+
+// Creating or deleting a binding, as the cluster decides it by who asks.
+function manage(role, member, where, remove) {
+  const p = M.as, wanted = { role, member, ...PATTERNS[where] }, all = SUPER.includes(p);
+  const owned = heldBy(p).filter(b => b.role === "ResourceOwner"), at = M.bindings.findIndex(b => same(b, wanted));
+  let ok = false, failed = false, why, short;
+  if (!all && !owned.length) {
+    why = "the broker's own check stops " + p + " before the rules for bindings: needs ALTER permission.";
+    short = "needs ALTER permission";
+  } else if (remove && at < 0) {
+    why = "no such binding: " + phrase(wanted); short = "no such binding"; failed = true;
+  } else if (!all && !owned.some(o => owns(o, wanted))) {
+    why = p + " may not " + (remove ? "delete " : "create ") + role + ":" + member + " on " + pattern(wanted)
+      + (remove ? ", which the filter matches" : "") + ": none of the ResourceOwner bindings of " + p
+      + " covers that pattern; it owns " + owned.slice(0, 5).map(pattern).join(", ")
+      + (owned.length > 5 ? " and " + (owned.length - 5) + " more" : "");
+    short = "outside what it owns";
+  } else {
+    ok = true;                                        // binding what is bound already changes nothing
+    if (remove) M.bindings.splice(at, 1); else if (at < 0) M.bindings.push(wanted);
+    why = (remove ? "Unbound " : "Bound ") + phrase(wanted);
+    short = remove ? "the record is deleted" : "an ACL record in the metadata";
+  }
+  M.last = { kind: "bind", ok, word: ok ? (remove ? "UNBOUND" : "BOUND") : failed ? "FAILED" : "REFUSED", step: 0,
+             head: p + (remove ? " unbinds " : " binds ") + phrase(wanted), why,
+             lines: [p + (remove ? " unbinds " : " binds ") + role, "to " + member + " on " + on(wanted), short] };
+  say(M.last.head + ": " + M.last.word);
+  return M.last;
+}
+
+// What User:admin sets: who is in the group, and the one deny ACL. Membership
+// is managed by whoever manages every ACL, and denying is done with ACLs.
+function setMember(yes) {
+  M.member = yes; M.last = null;
+  say(yes ? "Added User:alice to " + GROUP : "Removed User:alice from " + GROUP);
+}
+function setDeny(yes) {
+  M.deny = yes; M.last = null;
+  say("User:admin " + (yes ? "adds" : "removes") + " the ACL deny User:alice Read on topic billing.orders");
+}
+
+// ---------------------------------------------------------------- the model, drawn
+let shownAt = 0;                                      // the frame of the last answer: the steps light up one by one
+function drawSim(g, f) {
+  const L = M.last, age = still ? 99 : f - shownAt, done = L && age >= Math.max(0, L.step - 1) * 2;
+  // the metadata: every binding, the membership and the deny ACL are records
+  text(g, "METADATA", 4, 4, C.peach);
+  const recs = M.bindings.map(b => ["role", b.role]);
+  if (M.member) recs.push(["member"]); if (M.deny) recs.push(["deny"]);
+  if (!recs.length) text(g, "NO BINDINGS YET", 42, 4, C.dark);
+  recs.slice(-23).forEach(([kind, role], i) => {
+    const x = 42 + i * 9;
+    if (kind === "role") badge(g, x, 3, role); else if (kind === "deny") acl(g, x, 3, true); else tile(g, x, 3, "G", C.lavender);
+  });
+  // who asks
+  frame(g, 2, 16, 92, 62, C.lavender); text(g, "WHO ASKS", 6, 20, C.light);
+  [["User:admin", 16], ["User:alice", 44], ["User:bob", 72]].forEach(([p, x]) => {
+    const mine = M.as === p, name = p.slice(5);
+    if (mine) frame(g, x - 6, 28, 22, 36, C.white);
+    if (SUPER.includes(p)) crown(g, x, 31);
+    else heldBy(p).slice(0, 5).forEach((b, i) => R(g, x - 2 + i * 3, 33, 2, 2, BADGE[b.role][1]));
+    robot(g, x, 40, mine ? f : 0, mine && done && !L.ok ? C.pink : undefined);
+    centred(g, name, x + 5, 56, mine ? C.white : C.light);
+  });
+  text(g, "GROUP:PAYMENTS: " + (M.member ? "ALICE" : "EMPTY"), 6, 68, M.member ? C.lavender : C.dark);
+  // the node and its three steps; who may bind is decided by rules of its own
+  frame(g, 98, 16, 62, 62, C.lavender); text(g, "THE NODE", 113, 20, C.light);
+  ["1 ACLS", "2 DENY ACL", "3 ROLES"].forEach((label, i) => {
+    const k = i + 1, y = 21 + k * 10, reached = L && L.kind === "request" && age >= i * 2;
+    const led = !reached || k > L.step ? C.navy : k < L.step ? C.light : L.ok ? C.lime : C.red;
+    R(g, 103, y, 4, 5, led); text(g, label, 110, y, reached && k <= L.step ? C.white : C.light);
+  });
+  dots(g, 102, 155, 61, C.navy);
+  const bound = L && L.kind === "bind";
+  R(g, 103, 65, 4, 5, bound ? (L.ok ? C.lime : C.red) : C.navy); text(g, "BIND RULES", 110, 65, bound ? C.white : C.light);
+  // the resources; the ones that were asked about take the colour of their answer
+  frame(g, 164, 16, 90, 62, C.lavender);
+  text(g, "TOPICS", 168, 20, C.lavender); text(g, "GROUPS", 168, 51, C.lavender);
+  [["TOPIC", "billing.orders", 28], ["TOPIC", "billing.invoices", 35], ["TOPIC", "orders", 42],
+   ["GROUP", "billing.app", 59], ["GROUP", "billing-1", 66]].forEach(([type, name, y]) => {
+    const a = done && L.kind === "request" && L.asked.find(q => q.type === type && q.name === name);
+    if (a) text(g, ">", 166, y, C.yellow);
+    text(g, name, 170, y, a ? (a.ok ? C.lime : C.red) : name === "billing.invoices" ? C.dark : C.light);
+  });
+  // the verdict
+  if (!L) text(g, "PICK WHO ASKS. SEND A REQUEST OR BIND A ROLE.", 4, 86, C.lavender);
+  else if (done) {
+    text(g, L.word, 4, 82, L.ok ? C.lime : C.red, 2);
+    text(g, L.lines[0], 64, 81, C.white); text(g, L.lines[1], 64, 87, C.light); text(g, L.lines[2], 64, 93, L.ok ? C.lime : C.red);
+  }
+  ground(g, 256, 100); centred(g, "ROLES ONLY ADD. A DENY ACL WINS.", 128, 104, C.lavender);
+}
+
+function readout() {
+  const L = M.last, $ = id => document.getElementById(id);
+  $("r-as").textContent = M.as;
+  $("r-verdict").textContent = L ? L.word : "nothing asked yet";
+  $("r-asked").textContent = L ? L.head : "nothing yet";
+  $("r-why").textContent = L ? L.why : "–";
+  $("r-bindings").textContent = M.bindings.length ? M.bindings.map(phrase).join("; ") : "none";
+  $("r-group").textContent = M.member ? "User:alice" : "nobody";
+  $("r-acls").textContent = M.deny ? "deny User:alice Read on topic billing.orders" : "none";
+  const feed = $("feed"); feed.textContent = "";
+  for (const m of M.feed) feed.appendChild(document.createElement("li")).textContent = m;
+  for (const b of document.querySelectorAll("button[data-as]")) b.setAttribute("aria-pressed", b.dataset.as === M.as);
+  $("t-member").setAttribute("aria-pressed", M.member);
+  $("t-member").textContent = M.member ? "take User:alice out of Group:payments" : "put User:alice in Group:payments";
+  $("t-deny").setAttribute("aria-pressed", M.deny);
+  $("t-deny").textContent = (M.deny ? "remove the deny of" : "deny") + " User:alice Read on billing.orders";
+}
+
+// ---------------------------------------------------------------- running
+const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const visible = new Set();
+const watch = new IntersectionObserver(es => es.forEach(e => e.isIntersecting ? visible.add(e.target) : visible.delete(e.target)), { threshold: 0.2 });
+const pictures = [...document.querySelectorAll("canvas[data-scene]")];
+const simCanvas = document.getElementById("sim");
+[...pictures, simCanvas].forEach(c => watch.observe(c));
+function paint(c, draw, f) { const g = c.getContext("2d"); g.clearRect(0, 0, c.width, c.height); draw(g, f); }
+
+let frameNo = 0;
+reset();
+pictures.forEach(c => paint(c, SCENES[c.dataset.scene], 5));       // one frame for those who want no motion
+const show = () => { shownAt = frameNo; paint(simCanvas, drawSim, frameNo); readout(); };
+show();
+
+// With reduced motion nothing moves: the model is drawn again only when a button changes it.
+if (!still) setInterval(() => {
+  frameNo++;
+  for (const c of pictures) if (visible.has(c)) paint(c, SCENES[c.dataset.scene], frameNo);
+  if (visible.has(simCanvas)) paint(simCanvas, drawSim, frameNo);
+}, 160);
+
+const picked = id => document.getElementById(id).value;
+for (const b of document.querySelectorAll("button[data-as]")) b.addEventListener("click", () => { M.as = b.dataset.as; M.last = null; show(); });
+for (const b of document.querySelectorAll("button[data-req]")) b.addEventListener("click", () => { request(b.dataset.req); show(); });
+document.getElementById("bind").addEventListener("click", () => { manage(picked("b-role"), picked("b-member"), picked("b-on"), false); show(); });
+document.getElementById("unbind").addEventListener("click", () => { manage(picked("b-role"), picked("b-member"), picked("b-on"), true); show(); });
+document.getElementById("t-member").addEventListener("click", () => { setMember(!M.member); show(); });
+document.getElementById("t-deny").addEventListener("click", () => { setDeny(!M.deny); show(); });
+document.getElementById("reset").addEventListener("click", () => { reset(); show(); });
+
+// ---------------------------------------------------------------- slides
+const slides = [...document.querySelectorAll(".slide")];
+const current = () => { const y = scrollY + innerHeight / 2; let i = slides.findIndex(s => s.offsetTop + s.offsetHeight > y); return i < 0 ? slides.length - 1 : i; };
+const go = i => slides[Math.max(0, Math.min(slides.length - 1, i))].scrollIntoView({ behavior: still ? "auto" : "smooth" });
+const pos = document.getElementById("pos");
+const mark = () => { pos.textContent = (current() + 1) + " / " + slides.length; };
+addEventListener("scroll", mark, { passive: true }); mark();
+document.getElementById("prev").addEventListener("click", () => go(current() - 1));
+document.getElementById("next").addEventListener("click", () => go(current() + 1));
+addEventListener("keydown", e => {
+  if (e.target.closest("select")) return;             // the arrows there choose an option
+  if (e.target.closest("button, a, input") && (e.key === " " || e.key === "Enter")) return;
+  if (e.altKey || e.ctrlKey || e.metaKey) return;
+  if (["ArrowRight", "ArrowDown", "PageDown", " "].includes(e.key)) { e.preventDefault(); go(current() + 1); }
+  else if (["ArrowLeft", "ArrowUp", "PageUp"].includes(e.key)) { e.preventDefault(); go(current() - 1); }
+  else if (e.key === "Home") { e.preventDefault(); go(0); }
+  else if (e.key === "End") { e.preventDefault(); go(slides.length - 1); }
+});
+</script>
+</body>
+</html>

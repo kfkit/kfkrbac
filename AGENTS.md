@@ -32,6 +32,8 @@ defect, not a trade-off. The map:
 | `docs/provenance/` | how to verify a released jar, and the release hashes |
 | `claude-plugin/`, `.claude-plugin/marketplace.json` | a Claude Code plugin with one skill, for whoever adopts kfkrbac on a cluster of their own, not for work on this repository: the order to do things in and the mistakes to avoid, each step pointing at a section of `docs/`. The repository is its own marketplace, and `plugin.json` has no `version` on purpose, so every commit reaches those who installed it. The skill changes in the same pull request as the page it points at |
 | `.github/workflows/` | `ci.yml`: the check, and the integration suite for each supported release, a cluster and the documents (a pull request that touches only documents skips the releases and the cluster); `release.yml`: a signed jar from a tag |
+| `docs/index.html` | "How kfkrbac works", the page GitHub Pages serves at kfkit.dev/kfkrbac: one static file, no build step, nothing loaded from elsewhere, no version numbers; its demo is a model, not the code |
+| `.github/workflows/` | `ci.yml`: the check, and the integration suite for each supported release, a cluster and the documents; `release.yml`: a signed jar from a tag |
 
 ## Forbidden
 
