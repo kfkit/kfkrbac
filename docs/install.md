@@ -8,11 +8,11 @@ Strimzi. It ends with how to take the jar out again. The workers of Kafka
 Connect take the same jar with a line of their own, which is in
 [Kafka Connect](connect.md).
 
-> Status: there is no release yet, so the jar is built from this
-> repository. The commands for a node from the distribution, and the
+> Status: the commands for a node from the distribution, and the
 > variables for the `apache/kafka` image, are run by a test of the
 > integration suite (`DocsIT`) on a broker of the newest supported release,
-> and the output shown is what they printed there. The image build and the
+> with the jar built from this repository, and the output shown is what
+> they printed there. The image build and the
 > Strimzi steps have not been run; the page says so where they are.
 
 ## Before you start
