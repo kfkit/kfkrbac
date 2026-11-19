@@ -30,7 +30,7 @@ defect, not a trade-off. The map:
 | `docs/` | operator documentation, one page for each subject; a `bash` block is run by `DocsIT` or says why not |
 | `docs/examples/` | the files the documents and the tests of `apply` and `import` read |
 | `docs/provenance/` | how to verify a released jar, and the release hashes |
-| `.github/workflows/` | `ci.yml`: the check, and the integration suite for each supported release, a cluster and the documents; `release.yml`: a signed jar from a tag |
+| `.github/workflows/` | `ci.yml`: the check, and the integration suite for each supported release, a cluster and the documents (a pull request that touches only documents skips the releases and the cluster); `release.yml`: a signed jar from a tag |
 
 ## Forbidden
 
