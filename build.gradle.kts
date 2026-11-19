@@ -5,7 +5,7 @@ plugins {
     java
     `jvm-test-suite`
     `maven-publish`
-    id("me.champeau.jmh") version "0.7.3"
+    id("me.champeau.jmh") version "0.7.4"
     // Only its task type is used, to relocate kfkwho's classes. Applied, the
     // plugin would build and publish a second jar next to the one that ships.
     id("com.gradleup.shadow") version "9.6.1" apply false
@@ -20,9 +20,9 @@ group = "dev.kfkit"
 val kafkaVersion = "4.4.0"
 
 // What a Connect worker of that release has on its class path.
-val jakartaRsVersion = "3.1.0"
-val jacksonVersion = "2.21.7"
-val jerseyVersion = "3.1.10"
+val jakartaRsVersion = "4.0.0"
+val jacksonVersion = "2.23.0"
+val jerseyVersion = "4.0.3"
 
 // The broker image the integration tests run the jar on: -PbrokerVersion=4.1.2.
 val brokerVersion = providers.gradleProperty("brokerVersion").getOrElse(kafkaVersion)
@@ -126,7 +126,7 @@ dependencies {
     compileOnly("org.apache.kafka:kafka-clients:$kafkaVersion")
     compileOnly("org.apache.kafka:kafka-server-common:$kafkaVersion")
     // The broker ships an SLF4J; Kafka's own POM has it at runtime scope only.
-    compileOnly("org.slf4j:slf4j-api:1.7.36")
+    compileOnly("org.slf4j:slf4j-api:2.0.20")
     // The extension for Kafka Connect: the worker provides these. None of them
     // goes into the jar; a bundled jakarta.* breaks the worker.
     compileOnly("org.apache.kafka:connect-api:$kafkaVersion")
