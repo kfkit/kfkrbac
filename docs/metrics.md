@@ -30,7 +30,7 @@ Then restart, one node at a time. In the `apache/kafka` image the line is
 the environment variable `KAFKA_KFKRBAC_METRICS_ENABLED=true`
 ([Installation](install.md#the-apachekafka-image)).
 
-There is nothing to install next to the jar: it carries kfkwho 0.1.0 inside.
+There is nothing to install next to the jar: it carries kfkwho 0.1.1 inside.
 The setting is in the table of [Settings](settings.md): a value that is
 neither `true` nor `false` fails the start of the node with a message that
 names the key.
@@ -136,7 +136,7 @@ kfkwho:type=access,principal="User:alice",client-id=console-producer,resource-ty
 
 Only brokers record. On a node that is only a controller the setting creates
 nothing, because the requests a controller authorizes come from brokers; see
-[Brokers only](https://github.com/kfkit/kfkwho/blob/v0.1.0/docs/config.md#brokers-only).
+[Brokers only](https://github.com/kfkit/kfkwho/blob/v0.1.1/docs/config.md#brokers-only).
 
 ## What is recorded
 
@@ -186,23 +186,23 @@ producer that writes by an ordinary ACL change in the same way.
 The settings, the MBeans and the exporter rules are kfkwho's own, of the
 version in the jar, and are documented there:
 
-- [Configuration](https://github.com/kfkit/kfkwho/blob/v0.1.0/docs/config.md):
+- [Configuration](https://github.com/kfkit/kfkwho/blob/v0.1.1/docs/config.md):
   the `kfkwho.*` settings, such as how long an idle series lives, how many
   series may exist and how client ids are rewritten. They go into the same
   configuration, are read only when `kfkrbac.metrics.enabled` is `true`, and
   a wrong value then fails the start of the node with a message that names
   the key.
-- [Metrics](https://github.com/kfkit/kfkwho/blob/v0.1.0/docs/metrics.md):
+- [Metrics](https://github.com/kfkit/kfkwho/blob/v0.1.1/docs/metrics.md):
   the MBeans of the `kfkwho` domain, their tags and attributes, and what a
   series is.
-- [The exporter rules](https://github.com/kfkit/kfkwho/blob/v0.1.0/jmx-exporter/kfkwho.yml)
+- [The exporter rules](https://github.com/kfkit/kfkwho/blob/v0.1.1/jmx-exporter/kfkwho.yml)
   for the JMX Exporter, which turn the MBeans into series such as
 
   ```
   kfkwho_access_requests_total{principal="User:alice",client_id="billing",resource_type="TOPIC",resource="billing.orders",operation="WRITE",api="PRODUCE",result="ALLOWED"} 10.0
   ```
 
-- [Performance](https://github.com/kfkit/kfkwho/blob/v0.1.0/docs/performance.md):
+- [Performance](https://github.com/kfkit/kfkwho/blob/v0.1.1/docs/performance.md):
   what recording costs and the budget it is held to.
 
 ## Next to kfkwho's own jar

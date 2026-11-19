@@ -33,7 +33,7 @@ defect, not a trade-off. The map:
 | `claude-plugin/`, `.claude-plugin/marketplace.json` | a Claude Code plugin with one skill, for whoever adopts kfkrbac on a cluster of their own, not for work on this repository: the order to do things in and the mistakes to avoid, each step pointing at a section of `docs/`. The repository is its own marketplace, and `plugin.json` has no `version` on purpose, so every commit reaches those who installed it. The skill changes in the same pull request as the page it points at |
 | `.github/workflows/` | `ci.yml`: the check, and the integration suite for each supported release, a cluster and the documents (a pull request that touches only documents skips the releases and the cluster); `release.yml`: a signed jar from a tag |
 | `docs/index.html` | "How kfkrbac works", the page GitHub Pages serves at kfkit.dev/kfkrbac: one static file, no build step, nothing loaded from elsewhere, no version numbers, dark only; its demo is a model, not the code |
-| `.github/workflows/` | `ci.yml`: the check, and the integration suite for each supported release, a cluster and the documents; `release.yml`: a signed jar from a tag |
+| `scripts/bump-kfkwho.sh` | moves the kfkwho bundled to its latest release: the version, both SHA-256 and the links of `docs/` (see **A new kfkwho**) |
 
 ## Forbidden
 
@@ -248,6 +248,31 @@ settled in a pull request.
 - **Changelog entries go at the end of their section.** Entries that
   parallel branches add at the same place of `CHANGELOG.md` conflict every
   time.
+
+## A new kfkwho
+
+The jar carries the latest release of kfkwho. A new one is bundled as soon
+as it is out, before any issue: the routine looks for one at the start of
+every run.
+
+1. `scripts/bump-kfkwho.sh` (or `scripts/bump-kfkwho.sh X.Y.Z`). It checks
+   the jar against the SHA-256 its release states and against the jar on
+   Maven Central, then writes the version and both SHA-256 into
+   `build.gradle.kts` and moves the links of `docs/` to the new tag
+   (`MetricsDocTest` fails on any it missed). It prints the version, or
+   nothing when that version is already bundled.
+2. Read kfkwho's `CHANGELOG.md` for every version in between. One line
+   under `## Unreleased` / `### Changed`: "The jar carries kfkwho X.Y.Z,
+   where it carried …", and what changes for an operator, if anything. A
+   kfkwho change that renames or removes what kfkrbac publishes or reads (an
+   MBean, a tag, a `kfkwho.*` setting) is breaking here too: the **Breaking
+   changes are announced** rule, and `docs/metrics.md` and
+   `docs/settings.md` say the new form.
+3. A change of `AccessRecorder` that the code has to follow goes in the
+   same pull request. `./gradlew check`; CI runs the integration suite,
+   which uses the new exporter rules.
+4. Branch `claude/kfkwho-X.Y.Z` from the routine, `kfkwho-X.Y.Z` by hand;
+   title `chore: kfkwho X.Y.Z`, `chore!:` when step 2 found it breaking.
 
 ## Working an issue
 
