@@ -16,6 +16,7 @@
 set -euo pipefail
 
 repo=https://github.com/kfkit/kfkwho
+central=https://repo1.maven.org/maven2/dev/kfkit/kfkwho
 root=$(git rev-parse --show-toplevel)
 build="$root/build.gradle.kts"
 
@@ -29,9 +30,11 @@ current=$(sed -n 's/^val kfkwhoVersion = "\(.*\)"$/\1/p' "$build")
 if [[ $# -gt 0 ]]; then
     version=${1#v}
 else
-    # The redirect of /releases/latest names the tag; no API, no token.
-    location=$(curl -fsSI "$repo/releases/latest" | tr -d '\r' | sed -n 's/^[Ll]ocation: //p')
-    version=${location##*/tag/v}
+    # The latest release on Maven Central, where every kfkwho release goes
+    # from 0.1.1 on. Only Central, the release downloads and
+    # raw.githubusercontent.com are asked: the routine's sandbox refuses
+    # the other pages of github.com and the API for any other repository.
+    version=$(curl -fsSL "$central/maven-metadata.xml" | sed -n 's:.*<release>\(.*\)</release>.*:\1:p')
 fi
 [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a release version: '$version'" >&2; exit 1; }
 [[ $version == "$current" ]] && exit 0
@@ -44,15 +47,15 @@ trap 'rm -rf "$work"' EXIT
 
 curl -fsSL -o "$work/kfkwho.jar" "$repo/releases/download/v$version/kfkwho-$version.jar"
 curl -fsSL -o "$work/kfkwho.jar.sha256" "$repo/releases/download/v$version/kfkwho-$version.jar.sha256"
-curl -fsSL -o "$work/kfkwho.yml" "$repo/raw/v$version/jmx-exporter/kfkwho.yml"
+curl -fsSL -o "$work/kfkwho.yml" "https://raw.githubusercontent.com/kfkit/kfkwho/v$version/jmx-exporter/kfkwho.yml"
 
 jar=$(sha256 "$work/kfkwho.jar")
 published=$(cut -d' ' -f1 "$work/kfkwho.jar.sha256")
 [[ $jar == "$published" ]] || { echo "the jar's SHA-256 $jar is not the one the release states, $published" >&2; exit 1; }
 # The release's jar is the one on Maven Central, byte for byte; a release
 # before 0.1.1 is not there, and that is not an error.
-central="https://repo1.maven.org/maven2/dev/kfkit/kfkwho/$version/kfkwho-$version.jar"
-if curl -fsSL -o "$work/central.jar" "$central" 2>/dev/null; then
+central_jar="$central/$version/kfkwho-$version.jar"
+if curl -fsSL -o "$work/central.jar" "$central_jar" 2>/dev/null; then
     [[ $(sha256 "$work/central.jar") == "$jar" ]] || { echo "the jar on Maven Central is not the release's jar" >&2; exit 1; }
 fi
 rules=$(sha256 "$work/kfkwho.yml")
